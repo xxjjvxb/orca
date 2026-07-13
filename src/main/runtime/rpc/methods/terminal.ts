@@ -25,7 +25,7 @@ import {
   isTerminalInputTooLargeWithYield
 } from '../../../../shared/terminal-input'
 import { measureClipboardTextByteLength } from '../../../../shared/clipboard-text'
-import { isTuiAgent } from '../../../../shared/tui-agent-config'
+import { isBuiltInTuiAgent } from '../../../../shared/tui-agent-config'
 import { isTerminalQueryReply } from '../../../../shared/terminal-query-reply'
 import {
   EMPTY_TERMINAL_REPLY_QUERY_SCAN_STATE,
@@ -33,6 +33,7 @@ import {
   type TerminalReplyQuerySequence,
   type TerminalReplyQueryScanState
 } from '../../../../shared/terminal-reply-query-scan'
+import { AgentLaunchInputSchema } from './agent-launch-spawn-schema'
 import {
   MOBILE_SNAPSHOT_BYTE_BUDGET,
   MOBILE_SUBSCRIBE_SCROLLBACK_ROWS
@@ -914,7 +915,10 @@ const TerminalCreateParams = z.object({
     })
     .optional(),
   launchToken: OptionalString,
-  launchAgent: z.string().refine(isTuiAgent).optional(),
+  // Why: legacy field accepts built-in ids only; a custom id is admitted solely
+  // on the sanctioned `agentLaunch` path (U3).
+  launchAgent: z.string().refine(isBuiltInTuiAgent).optional(),
+  agentLaunch: AgentLaunchInputSchema.optional(),
   terminalColorQueryReplies: z
     .object({
       foreground: z.string().max(128).optional(),
@@ -1347,8 +1351,8 @@ export const TERMINAL_METHODS: RpcAnyMethod[] = [
   defineMethod({
     name: 'terminal.create',
     params: TerminalCreateParams,
-    handler: async (params, { runtime }) => ({
-      terminal: await runtime.createTerminal(params.worktree, {
+    handler: async (params, { runtime, clientKind }) => {
+      const baseOpts = {
         command: params.command,
         startupCommandDelivery: params.startupCommandDelivery,
         env: params.env,
@@ -1359,6 +1363,8 @@ export const TERMINAL_METHODS: RpcAnyMethod[] = [
         ...(params.terminalColorQueryReplies
           ? { terminalColorQueryReplies: params.terminalColorQueryReplies }
           : {}),
+        // Authenticated RPC scope for host-resolved launches; never client JSON.
+        clientKind,
         title: params.title,
         focus: params.focus === true,
         rendererBacked: params.rendererBacked === true,
@@ -1366,8 +1372,20 @@ export const TERMINAL_METHODS: RpcAnyMethod[] = [
         presentation: params.presentation,
         tabId: params.tabId,
         leafId: params.leafId
-      })
-    })
+      }
+      if (params.agentLaunch) {
+        const result = await runtime.createTerminal(params.worktree, {
+          ...baseOpts,
+          agentLaunch: params.agentLaunch
+        })
+        // A pre-spawn typed failure is an RPC success with no terminal created.
+        if (!('handle' in result)) {
+          return { agentLaunch: result.agentLaunch }
+        }
+        return { terminal: result }
+      }
+      return { terminal: await runtime.createTerminal(params.worktree, baseOpts) }
+    }
   }),
   defineMethod({
     name: 'terminal.split',
