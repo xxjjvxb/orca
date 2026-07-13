@@ -359,7 +359,7 @@ export default function AiVaultPanel(): React.JSX.Element {
         onJumpToOriginalPane={jumpToOriginalPane}
         onJumpToWorktree={jumpToWorktree}
         onResume={handleResume}
-        onCopyResume={(session, worktreeId) => void copyResumeCommand(session, worktreeId)}
+        onCopyResume={(session) => void copyResumeCommand(session)}
         onCopyId={(session) =>
           void copyText(
             session.sessionId,

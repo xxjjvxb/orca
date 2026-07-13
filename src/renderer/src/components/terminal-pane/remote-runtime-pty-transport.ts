@@ -4,13 +4,19 @@ import type {
   RuntimeMobileSessionTerminalClientTab,
   RuntimeMobileSessionTabsResult,
   RuntimeTerminalCreate,
+  RuntimeTerminalCreateAgentLaunchFailure,
   RuntimeTerminalSend
 } from '../../../../shared/runtime-types'
 import {
   isTerminalInputTooLargeWithDeferredMeasurement,
   iterateTerminalInputChunks
 } from '../../../../shared/terminal-input'
-import type { IpcPtyTransportOptions, PtyConnectResult, PtyTransport } from './pty-transport-types'
+import type {
+  IpcPtyTransportOptions,
+  PtyConnectAgentLaunchFailure,
+  PtyConnectResult,
+  PtyTransport
+} from './pty-transport-types'
 import { createPtyOutputProcessor } from './pty-transport'
 import { unwrapRuntimeRpcResult } from '../../runtime/runtime-rpc-client'
 import {
@@ -71,6 +77,7 @@ export function createRemoteRuntimePtyTransport(
     launchToken,
     launchAgent,
     terminalColorQueryReplies,
+    agentLaunch,
     worktreeId,
     tabId,
     leafId,
@@ -773,25 +780,38 @@ export function createRemoteRuntimePtyTransport(
           return await attachHostSessionMirror(options)
         }
 
-        const commandToSend = options.command ?? command
-        const startupCommandDeliveryToSend =
-          options.startupCommandDelivery ?? startupCommandDelivery
         const envToSend = options.env ?? env
         const envToDeleteToSend = options.envToDelete ?? envToDelete
-        const launchConfigToSend = options.launchConfig ?? launchConfig
-        const launchTokenToSend = options.launchToken ?? launchToken
-        const launchAgentToSend = options.launchAgent ?? launchAgent
-        const created = await callRuntime<{ terminal: RuntimeTerminalCreate }>('terminal.create', {
+        const agentLaunchToSend = options.agentLaunch ?? agentLaunch
+        // Why: on the host-resolved agentLaunch path the host owns command,
+        // launchConfig, and token assembly and ignores these client fields, so we
+        // send only the request; the legacy/resume path keeps sending them.
+        const launchFieldsToSend = agentLaunchToSend
+          ? { agentLaunch: agentLaunchToSend }
+          : (() => {
+              const commandToSend = options.command ?? command
+              const startupCommandDeliveryToSend =
+                options.startupCommandDelivery ?? startupCommandDelivery
+              const launchConfigToSend = options.launchConfig ?? launchConfig
+              const launchTokenToSend = options.launchToken ?? launchToken
+              const launchAgentToSend = options.launchAgent ?? launchAgent
+              return {
+                ...(commandToSend !== undefined ? { command: commandToSend } : {}),
+                ...(startupCommandDeliveryToSend !== undefined
+                  ? { startupCommandDelivery: startupCommandDeliveryToSend }
+                  : {}),
+                ...(launchConfigToSend !== undefined ? { launchConfig: launchConfigToSend } : {}),
+                ...(launchTokenToSend !== undefined ? { launchToken: launchTokenToSend } : {}),
+                ...(launchAgentToSend !== undefined ? { launchAgent: launchAgentToSend } : {})
+              }
+            })()
+        const created = await callRuntime<
+          { terminal: RuntimeTerminalCreate } | RuntimeTerminalCreateAgentLaunchFailure
+        >('terminal.create', {
           worktree: toRuntimeTerminalWorktreeSelector(worktreeId),
-          ...(commandToSend !== undefined ? { command: commandToSend } : {}),
-          ...(startupCommandDeliveryToSend !== undefined
-            ? { startupCommandDelivery: startupCommandDeliveryToSend }
-            : {}),
+          ...launchFieldsToSend,
           ...(envToSend !== undefined ? { env: envToSend } : {}),
           ...(envToDeleteToSend !== undefined ? { envToDelete: envToDeleteToSend } : {}),
-          ...(launchConfigToSend !== undefined ? { launchConfig: launchConfigToSend } : {}),
-          ...(launchTokenToSend !== undefined ? { launchToken: launchTokenToSend } : {}),
-          ...(launchAgentToSend !== undefined ? { launchAgent: launchAgentToSend } : {}),
           ...(terminalColorQueryReplies ? { terminalColorQueryReplies } : {}),
           tabId,
           leafId,
@@ -800,6 +820,12 @@ export function createRemoteRuntimePtyTransport(
           presentation: 'background',
           ...(activate === true ? { activate: true } : {})
         })
+        // Pre-spawn agentLaunch failure/rejection: the host created no terminal.
+        // Surface the outcome so the caller shows the localized affordance and
+        // creates no pane (symmetric with the IPC transport).
+        if (!('terminal' in created)) {
+          return { agentLaunch: created.agentLaunch } satisfies PtyConnectAgentLaunchFailure
+        }
         handle = created.terminal.handle
         if (destroyed) {
           // Why: cancelled launch, not a shared session; close the server PTY so rapid tab-open/close does not leak.
@@ -822,7 +848,10 @@ export function createRemoteRuntimePtyTransport(
 
         return {
           id: remotePtyId,
-          replay: ''
+          replay: '',
+          // Receipt-only: pane identity/attribution rides the receipt token and
+          // the status stream; the runtime result never echoes a launch config.
+          ...(created.terminal.agentLaunch ? { agentLaunch: created.terminal.agentLaunch } : {})
         } satisfies PtyConnectResult
       } catch (error) {
         storedCallbacks.onError?.(runtimeTerminalErrorMessage(error))

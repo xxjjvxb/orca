@@ -1,7 +1,6 @@
 import { useCallback } from 'react'
 import { toast } from 'sonner'
 import {
-  buildAiVaultResumeCopyCommandForWorktree,
   buildAiVaultResumeStartupForWorktree,
   type AiVaultResumeStartup
 } from '@/lib/ai-vault-resume-command'
@@ -26,6 +25,7 @@ import {
   isKnownAiVaultResumeWorkspaceTarget,
   type AiVaultSessionResumeTargetState
 } from './ai-vault-session-resume'
+import { buildAiVaultResumeEntry } from './ai-vault-resume-entry'
 
 export function useAiVaultSessionLaunchActions({
   activeWorktree,
@@ -39,20 +39,9 @@ export function useAiVaultSessionLaunchActions({
   agentCmdOverrides?: Partial<Record<AiVaultAgent, string | null>>
 }): {
   buildResumeStartup: (session: AiVaultSession, worktreeId?: string | null) => AiVaultResumeStartup
-  copyResumeCommand: (session: AiVaultSession, worktreeId?: string | null) => Promise<void>
+  copyResumeCommand: (session: AiVaultSession) => Promise<void>
   handleResume: (session: AiVaultSession, targetWorktreeId?: string) => void
 } {
-  const buildResumeCommand = useCallback(
-    (session: AiVaultSession, worktreeId?: string | null): string =>
-      buildAiVaultResumeCopyCommandForWorktree({
-        state: useAppStore.getState(),
-        worktreeId: worktreeId ?? activeWorktreeId ?? activeWorktree?.id ?? null,
-        session,
-        commandOverride: agentCmdOverrides?.[session.agent]
-      }),
-    [activeWorktree?.id, activeWorktreeId, agentCmdOverrides]
-  )
-
   const buildResumeStartup = useCallback(
     (session: AiVaultSession, worktreeId?: string | null) =>
       buildAiVaultResumeStartupForWorktree({
@@ -64,25 +53,29 @@ export function useAiVaultSessionLaunchActions({
     [activeWorktree?.id, activeWorktreeId, agentCmdOverrides]
   )
 
-  const copyResumeCommand = useCallback(
-    async (session: AiVaultSession, worktreeId?: string | null): Promise<void> => {
-      try {
-        const preparedSession = await prepareAiVaultSessionForResume(session)
-        await window.api.ui.writeClipboardText(buildResumeCommand(preparedSession, worktreeId))
-        toast.success(
-          translate(
-            'auto.components.right.sidebar.AiVaultPanel.resumeCommandCopied',
-            'Resume command copied'
-          )
+  const copyResumeCommand = useCallback(async (session: AiVaultSession): Promise<void> => {
+    // Host-owned copy: the host re-validates the discovered entry against its own
+    // fresh scanner and assembles the command from its settings; the client only
+    // echoes identity and writes the returned string. On web/paired the IPC strips
+    // filePath and the executing host re-derives it.
+    const result = await window.api.aiVault.resumeCommand(buildAiVaultResumeEntry(session))
+    if (result.status !== 'ok') {
+      toast.error(
+        translate(
+          'auto.components.right.sidebar.AiVaultPanel.resumeSessionUnavailable',
+          'This session can no longer be resumed.'
         )
-      } catch (error) {
-        toast.error(
-          error instanceof Error ? error.message : 'Could not prepare this session for resume.'
-        )
-      }
-    },
-    [buildResumeCommand]
-  )
+      )
+      return
+    }
+    await window.api.ui.writeClipboardText(result.command)
+    toast.success(
+      translate(
+        'auto.components.right.sidebar.AiVaultPanel.resumeCommandCopied',
+        'Resume command copied'
+      )
+    )
+  }, [])
 
   const handleResume = useCallback(
     (session: AiVaultSession, targetWorktreeId?: string): void => {
@@ -122,7 +115,10 @@ export function useAiVaultSessionLaunchActions({
           const launchResult = launchAiVaultSessionInNewTab({
             agent: session.agent,
             worktreeId: targetId.worktreeId,
-            ...buildResumeStartup(preparedSession, targetId.worktreeId)
+            ...buildResumeStartup(preparedSession, targetId.worktreeId),
+            agentLaunch: {
+              vaultResume: { operation: 'resume', entry: buildAiVaultResumeEntry(session) }
+            }
           })
           if (launchResult.tabId === null) {
             void launchResult.runtimeLaunch.then((created) => {
