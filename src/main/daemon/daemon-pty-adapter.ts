@@ -779,7 +779,10 @@ export class DaemonPtyAdapter implements IPtyProvider {
         // Why: OSC 7 may not arrive before cleanup; spawn cwd is authoritative until the daemon reports a live cwd.
         cwd: s.cwd ?? this.initialCwds.get(s.sessionId) ?? '',
         title: 'shell',
-        ...(s.terminalHandle ? { terminalHandle: s.terminalHandle } : {})
+        ...(s.terminalHandle ? { terminalHandle: s.terminalHandle } : {}),
+        // Crash reconcile matches pending launches by re-listed token; dropping
+        // it here would false-settle spawn_failed for live daemon PTYs.
+        ...(s.launchToken ? { launchToken: s.launchToken } : {})
       }))
   }
 
