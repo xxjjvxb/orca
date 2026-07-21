@@ -484,4 +484,24 @@ describe('runRemoteOrcaCli', () => {
     expect(result.stderr).toContain('Unsupported SSH Orca CLI command: worktree list')
     expect(result.stderr).toContain('full Orca CLI bridge unavailable')
   })
+
+  it('does not parse Android --activity values as Linear boolean flags', async () => {
+    const { runtime } = createRuntime()
+
+    const result = await runRemoteOrcaCli(
+      runtime,
+      {
+        argv: ['emulator', 'launch', 'com.acme.app', '--activity', '.MainActivity'],
+        cwd: '/home/alice',
+        env: {}
+      },
+      LEGACY_FALLBACK_OPTIONS
+    )
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toContain(
+      'Unsupported SSH Orca CLI command: emulator launch com.acme.app'
+    )
+    expect(result.stderr).not.toContain('com.acme.app .MainActivity')
+  })
 })

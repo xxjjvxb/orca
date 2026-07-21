@@ -108,7 +108,7 @@ function formatLinearIssue(result: LinearIssueContextResult): string {
   if (issue.dueDate) {
     lines.push(`Due: ${issue.dueDate}`)
   }
-  for (const section of ['comments', 'children', 'attachments', 'relations'] as const) {
+  for (const section of ['comments', 'children', 'attachments', 'relations', 'activity'] as const) {
     const meta = result.meta.sections[section]
     if (meta) {
       lines.push(`${section[0].toUpperCase()}${section.slice(1)}: ${meta.returned}`)

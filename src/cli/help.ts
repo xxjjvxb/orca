@@ -587,6 +587,9 @@ export function formatFlagHelp(flag: string): string {
   if (flag === 'relations') {
     return '--relations            Include blocking, related, and duplicate links'
   }
+  if (flag === 'activity') {
+    return '--activity             Include issue field-change history'
+  }
   if (flag === 'full') {
     return '--full                 Include all supported V1 issue context within caps'
   }
