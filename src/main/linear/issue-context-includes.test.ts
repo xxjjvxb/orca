@@ -159,6 +159,7 @@ describe('Linear issue context includes', () => {
       expect(query).toContain('$after: String')
       expect(query).toContain('after: $after')
     }
+    expect(ACTIVITY_QUERY).not.toContain('attachment { id title url source }')
   })
 
   it('does not probe grandchildren when the first child page exhausts the node cap', async () => {
@@ -259,6 +260,11 @@ describe('Linear issue context includes', () => {
                 fromPriority: 3,
                 toPriority: 2,
                 relationChanges: [{ identifier: 'ENG-9', type: 'blocks' }]
+              },
+              {
+                id: 'history-3',
+                archived: false,
+                trashed: false
               }
             ],
             pageInfo: { hasNextPage: false }
@@ -297,12 +303,61 @@ describe('Linear issue context includes', () => {
           { field: 'priority', from: 3, to: 2 },
           { field: 'relations', to: [{ identifier: 'ENG-9', type: 'blocks' }] }
         ]
+      }),
+      expect.objectContaining({
+        id: 'history-3',
+        actor: { kind: 'system', displayName: 'Linear' },
+        changes: [
+          { field: 'archived', to: false },
+          { field: 'trashed', to: false }
+        ]
       })
     ])
     expect(output.meta.sections.activity).toMatchObject({
-      returned: 2,
+      returned: 3,
       cap: 250,
       capReached: false
+    })
+  })
+
+  it('caps activity history at five provider pages', async () => {
+    for (let page = 0; page < 5; page += 1) {
+      plainRawRequest.mockResolvedValueOnce({
+        data: {
+          issue: {
+            history: {
+              nodes: Array.from({ length: 50 }, (_, index) => ({
+                id: `history-${page * 50 + index}`
+              })),
+              pageInfo: { hasNextPage: true, endCursor: `activity-cursor-${page}` }
+            }
+          }
+        }
+      })
+    }
+    const { readOptionalIncludes } = await import('./issue-context-includes')
+    const output = result()
+
+    await readOptionalIncludes(
+      resolvedIssue(),
+      requestWithActivity(),
+      output,
+      [],
+      output.meta.sections
+    )
+
+    expect(output.activity).toHaveLength(250)
+    expect(output.meta.sections.activity).toMatchObject({
+      returned: 250,
+      cap: 250,
+      capReached: true,
+      hasMore: true
+    })
+    expect(plainRawRequest).toHaveBeenCalledTimes(5)
+    expect(plainRawRequest.mock.calls[4]?.[1]).toEqual({
+      id: 'parent',
+      first: 50,
+      after: 'activity-cursor-3'
     })
   })
 

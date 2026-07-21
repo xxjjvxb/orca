@@ -11,6 +11,35 @@ function makeRequest(method: string, params?: unknown): RpcRequest {
 }
 
 describe('Linear agent access RPC methods', () => {
+  it('defaults activity off for clients using the pre-activity issue request shape', async () => {
+    const runtime = {
+      getRuntimeId: () => 'test-runtime',
+      linearIssueContext: vi.fn().mockResolvedValue({ ok: true })
+    } as unknown as OrcaRuntimeService
+    const dispatcher = new RpcDispatcher({ runtime, methods: LINEAR_AGENT_ACCESS_METHODS })
+
+    const response = await dispatcher.dispatch(
+      makeRequest('linear.issueContext', {
+        input: 'ENG-1',
+        include: { comments: false, children: false, attachments: false, relations: false },
+        depth: 0
+      })
+    )
+
+    expect(response.ok).toBe(true)
+    expect(runtime.linearIssueContext).toHaveBeenCalledWith({
+      input: 'ENG-1',
+      include: {
+        comments: false,
+        children: false,
+        attachments: false,
+        relations: false,
+        activity: false
+      },
+      depth: 0
+    })
+  })
+
   it('routes agent write methods to the runtime server', async () => {
     const runtime = {
       getRuntimeId: () => 'test-runtime',

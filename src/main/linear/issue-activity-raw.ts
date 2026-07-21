@@ -104,7 +104,7 @@ export const ACTIVITY_QUERY = `
           addedLabels { id name color }
           removedLabels { id name color }
           relationChanges { identifier type }
-          attachment { id title url source }
+          attachment { id title url }
           archived
           autoArchived
           autoClosed
@@ -146,8 +146,8 @@ export function mapActivity(node: RawActivityNode): LinearIssueActivityEntry {
     changes.push({ field: 'attachment', to: node.attachment })
   }
   for (const field of ['archived', 'autoArchived', 'autoClosed', 'trashed'] as const) {
-    if (node[field]) {
-      changes.push({ field, to: true })
+    if (node[field] != null) {
+      changes.push({ field, to: node[field] })
     }
   }
   const bot = node.botActor
