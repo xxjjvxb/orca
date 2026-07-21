@@ -178,7 +178,8 @@ function buildRemoteLinearIssueRequest(
     comments: full || parsed.flags.get('comments') === true,
     children: full || parsed.flags.get('children') === true,
     attachments: full || parsed.flags.get('attachments') === true,
-    relations: full || parsed.flags.get('relations') === true
+    relations: full || parsed.flags.get('relations') === true,
+    activity: full || parsed.flags.get('activity') === true
   }
   if (parsed.flags.has('depth') && !include.children) {
     throw new RemoteCliArgumentError('invalid_argument', '--depth requires --children or --full')

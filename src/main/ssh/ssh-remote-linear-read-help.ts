@@ -69,7 +69,7 @@ Run \`orca linear <command> --help\` for command-specific usage.`
 
 const LINEAR_ISSUE_HELP = `orca linear issue
 
-Usage: orca linear issue [<id>] [--current] [--comments] [--children] [--depth <n>] [--attachments] [--relations] [--full] [--workspace <id>] [--json]
+Usage: orca linear issue [<id>] [--current] [--comments] [--children] [--depth <n>] [--attachments] [--relations] [--activity] [--full] [--workspace <id>] [--json]
 
 Read Linear issue context for agents
 
@@ -84,6 +84,7 @@ Options:
   --depth <n>            Child issue depth for --children/--full
   --attachments          Include attachment metadata and URLs
   --relations            Include blocking, related, and duplicate links
+  --activity             Include issue field-change history
   --full                 Include all supported V1 issue context within caps
   --workspace <id>      Connected Linear workspace id
   --id <id>             Linear issue key, id, or URL

@@ -107,7 +107,13 @@ describe('runRemoteOrcaCli', () => {
         meta: {
           requested: {
             current: true,
-            include: { comments: true, children: true, attachments: true, relations: true },
+            include: {
+              comments: true,
+              children: true,
+              attachments: true,
+              relations: true,
+              activity: true
+            },
             depth: 2
           },
           resolved: {

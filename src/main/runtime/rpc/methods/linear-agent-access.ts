@@ -45,7 +45,8 @@ const LinearIncludeFlags = z.object({
   comments: z.boolean(),
   children: z.boolean(),
   attachments: z.boolean(),
-  relations: z.boolean()
+  relations: z.boolean(),
+  activity: z.boolean()
 })
 
 const LinearCurrentContext = z

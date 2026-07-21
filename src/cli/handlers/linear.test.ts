@@ -81,7 +81,8 @@ describe('orca linear CLI handlers', () => {
           comments: true,
           children: true,
           attachments: true,
-          relations: true
+          relations: true,
+          activity: true
         },
         depth: 2,
         context: {
@@ -106,7 +107,8 @@ describe('orca linear CLI handlers', () => {
           comments: true,
           children: true,
           attachments: true,
-          relations: true
+          relations: true,
+          activity: true
         })
       }),
       { timeoutMs: 120_000 }
@@ -488,7 +490,13 @@ function issueResult(): unknown {
     meta: {
       requested: {
         current: false,
-        include: { comments: false, children: false, attachments: false, relations: false },
+        include: {
+          comments: false,
+          children: false,
+          attachments: false,
+          relations: false,
+          activity: false
+        },
         depth: 2
       },
       resolved: {

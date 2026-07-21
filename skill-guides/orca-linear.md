@@ -68,7 +68,7 @@ Do not use `orca linear attach` to read screenshots. That command creates link a
 ## Common Commands
 
 ```bash
-orca linear issue [<id>] [--current] [--comments] [--children] [--depth <n>] [--attachments] [--relations] [--full] [--workspace <id>] [--json]
+orca linear issue [<id>] [--current] [--comments] [--children] [--depth <n>] [--attachments] [--relations] [--activity] [--full] [--workspace <id>] [--json]
 orca linear search <query> [--limit <n>] [--workspace <id>|all] [--json]
 orca linear team list [--workspace <id>|all] [--json]
 orca linear team members --team <key|id> [--workspace <id>] [--json]

@@ -34,6 +34,7 @@ const HOST_INTERACTIVE_COMMANDS: Record<string, string> = {
 
 const REMOTE_BOOLEAN_FLAGS = new Set([
   'all',
+  'activity',
   'attachments',
   'children',
   'comments',

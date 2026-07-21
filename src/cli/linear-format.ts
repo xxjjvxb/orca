@@ -54,6 +54,9 @@ export function formatLinearIssue(result: LinearIssueContextResult): string {
   if (sections.relations) {
     lines.push(`Relations: ${sections.relations.returned}`)
   }
+  if (sections.activity) {
+    lines.push(`Activity: ${sections.activity.returned}`)
+  }
   if (result.inlineMedia?.length) {
     lines.push(`Inline media: ${result.inlineMedia.length} (use --json for URLs)`)
   }

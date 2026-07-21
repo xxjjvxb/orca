@@ -1,6 +1,7 @@
 import type {
   LinearCollectionMeta,
   LinearIssueAttachment,
+  LinearIssueActivityEntry,
   LinearIssueChildNode,
   LinearIssueCommentNode,
   LinearIssueContextResult,
@@ -10,6 +11,7 @@ import type {
 } from '../../shared/linear-agent-access'
 import {
   LINEAR_ATTACHMENTS_CAP,
+  LINEAR_ACTIVITY_CAP,
   LINEAR_CHILDREN_NODE_CAP,
   LINEAR_COMMENTS_CAP,
   LINEAR_COMMENT_BODY_CAP,
@@ -22,6 +24,7 @@ import { getRequiredEntry, withLinearRead } from './issue-context-client'
 import { getPublicFileUrlClient } from './client'
 import { includeErrorCode } from './issue-context-errors'
 import { readConnectionPages } from './issue-context-pagination'
+import { ACTIVITY_QUERY, mapActivity, type RawActivityResponse } from './issue-activity-raw'
 import {
   ATTACHMENTS_QUERY,
   CHILDREN_QUERY,
@@ -57,6 +60,9 @@ export async function readOptionalIncludes(
   }
   if (request.include.relations) {
     includeTasks.push(['relations', async () => assignRelations(resolved, result, sections)])
+  }
+  if (request.include.activity) {
+    includeTasks.push(['activity', async () => assignActivity(resolved, result, sections)])
   }
 
   for (const [include, task] of includeTasks) {
@@ -111,6 +117,16 @@ async function assignRelations(
   const read = await readRelations(resolved)
   result.relations = read.items
   sections.relations = read.meta
+}
+
+async function assignActivity(
+  resolved: ResolvedIssue,
+  result: LinearIssueContextResult,
+  sections: LinearIssueContextResult['meta']['sections']
+): Promise<void> {
+  const read = await readActivity(resolved)
+  result.activity = read.items
+  sections.activity = read.meta
 }
 
 async function readComments(resolved: ResolvedIssue): Promise<{
@@ -277,5 +293,25 @@ async function readRelations(
   return {
     items,
     meta: collectionMeta(items.length, LINEAR_RELATIONS_CAP, response.hasMore)
+  }
+}
+
+async function readActivity(
+  resolved: ResolvedIssue
+): Promise<{ items: LinearIssueActivityEntry[]; meta: LinearCollectionMeta }> {
+  const entry = getRequiredEntry(resolved.workspace.id)
+  const response = await readConnectionPages(LINEAR_ACTIVITY_CAP, async (page) => {
+    return await withLinearRead(entry, async () => {
+      const raw = await entry.client.client.rawRequest<
+        RawActivityResponse,
+        Record<string, unknown>
+      >(ACTIVITY_QUERY, { id: resolved.issue.id, ...page })
+      return raw.data?.issue?.history ?? null
+    })
+  })
+  const items = response.nodes.slice(0, LINEAR_ACTIVITY_CAP).map(mapActivity)
+  return {
+    items,
+    meta: collectionMeta(items.length, LINEAR_ACTIVITY_CAP, response.hasMore)
   }
 }

@@ -9,6 +9,7 @@ export const LINEAR_ISSUE_FLAGS = new Set([
   'depth',
   'attachments',
   'relations',
+  'activity',
   'full',
   'workspace',
   'id'

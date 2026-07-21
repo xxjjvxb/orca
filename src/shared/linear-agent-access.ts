@@ -7,6 +7,7 @@ export const LINEAR_CHILDREN_MAX_DEPTH = 5
 export const LINEAR_CHILDREN_NODE_CAP = 200
 export const LINEAR_ATTACHMENTS_CAP = 100
 export const LINEAR_RELATIONS_CAP = 100
+export const LINEAR_ACTIVITY_CAP = 250
 export const LINEAR_WRITE_BODY_CAP = 65_000
 
 export const LINEAR_ERROR_CODES = [
@@ -38,7 +39,7 @@ export const LINEAR_ERROR_CODES = [
 
 export type LinearErrorCode = (typeof LINEAR_ERROR_CODES)[number]
 
-export type LinearIssueInclude = 'comments' | 'children' | 'attachments' | 'relations'
+export type LinearIssueInclude = 'comments' | 'children' | 'attachments' | 'relations' | 'activity'
 
 export type LinearIncludeErrorCode =
   | 'linear_timeout'
@@ -91,6 +92,7 @@ export type {
   LinearWriteIssueRef,
   LinearIssueTaskUpdateResult
 } from './linear-agent-result-types'
+export type { LinearIssueActivityEntry, LinearIssueActivityValue } from './linear-issue-activity'
 export type { LinearInlineMedia } from './linear-inline-media'
 
 export type LinearWriteTargetRequest = {
