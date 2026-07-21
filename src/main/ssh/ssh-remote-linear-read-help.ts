@@ -41,6 +41,8 @@ const LINEAR_HELP = `orca linear
 Usage: orca linear <command> [options]
 
 Commands:
+  relation add       Add a Linear issue relation
+  relation remove    Remove a Linear issue relation
   issue              Read Linear issue context for agents
   search             Search connected Linear workspaces
   team list          List connected Linear teams

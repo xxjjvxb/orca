@@ -249,6 +249,39 @@ describe('orca linear CLI handlers', () => {
     )
   })
 
+  it('maps relation writes to the current-issue perspective', async () => {
+    queueFixtures(callMock, okFixture('req_relation', relationWriteResult()))
+
+    await main(
+      [
+        'linear',
+        'relation',
+        'add',
+        'ENG-123',
+        '--related',
+        'ENG-456',
+        '--type',
+        'blocked-by',
+        '--json'
+      ],
+      '/tmp/repo'
+    )
+
+    expect(callMock).toHaveBeenCalledWith(
+      'linear.issueRelationWrite',
+      {
+        input: 'ENG-123',
+        current: false,
+        workspaceId: undefined,
+        relatedInput: 'ENG-456',
+        relationship: 'blockedBy',
+        operation: 'add',
+        context: { remote: false, cwd: '/tmp/repo' }
+      },
+      { timeoutMs: 75_000 }
+    )
+  })
+
   it('rejects impossible due dates before dispatch', async () => {
     await main(['linear', 'due-date', 'set', 'ENG-123', '--to', '2026-02-30'], '/tmp/repo')
 
@@ -551,6 +584,31 @@ function taskUpdateResult(operation: string): unknown {
     operation,
     previous: {},
     current: {},
+    meta: { workspaceId: 'workspace-1', alreadySet: false }
+  }
+}
+
+function relationWriteResult(): unknown {
+  return {
+    issue: {
+      id: 'issue-id',
+      identifier: 'ENG-123',
+      title: 'Current',
+      url: 'https://linear.app/acme/issue/ENG-123'
+    },
+    relatedIssue: {
+      id: 'related-id',
+      identifier: 'ENG-456',
+      title: 'Related',
+      url: 'https://linear.app/acme/issue/ENG-456'
+    },
+    relation: {
+      id: 'relation-id',
+      type: 'blocks',
+      direction: 'inbound',
+      relationship: 'blockedBy'
+    },
+    operation: 'add',
     meta: { workspaceId: 'workspace-1', alreadySet: false }
   }
 }

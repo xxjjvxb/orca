@@ -92,6 +92,11 @@ export type {
   LinearIssueTaskUpdateResult
 } from './linear-agent-result-types'
 export type { LinearInlineMedia } from './linear-inline-media'
+export type {
+  LinearIssueRelationship,
+  LinearIssueRelationWriteRequest,
+  LinearIssueRelationWriteResult
+} from './linear-issue-relation-write'
 
 export type LinearWriteTargetRequest = {
   input?: string

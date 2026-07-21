@@ -71,6 +71,8 @@ export type LinearIssueAttachment = {
 export type LinearIssueRelation = {
   id: string
   type?: string | null
+  direction: 'outbound' | 'inbound'
+  relationship: 'blocks' | 'blockedBy' | 'relatedTo' | 'duplicateOf' | 'duplicatedBy' | 'similar'
   relatedIssue?: Pick<LinearIssueSummary, 'id' | 'identifier' | 'title' | 'url'> | null
 }
 

@@ -96,6 +96,12 @@ const LinearIssueAddComment = LinearWriteTarget.extend({
   writeId: OptionalString
 })
 
+const LinearIssueRelationWrite = LinearWriteTarget.extend({
+  relatedInput: requiredString('Missing related issue'),
+  relationship: z.enum(['blocks', 'blockedBy', 'relatedTo', 'duplicateOf']),
+  operation: z.enum(['add', 'remove'])
+})
+
 const LinearIssueAttachLink = LinearWriteTarget.extend({
   url: requiredString('Missing attachment URL'),
   title: OptionalString,
@@ -193,6 +199,11 @@ export const LINEAR_AGENT_ACCESS_METHODS: RpcMethod[] = [
     name: 'linear.issueUpdateTask',
     params: LinearIssueUpdateTask,
     handler: async (params, { runtime }) => runtime.linearIssueUpdateTask(params)
+  }),
+  defineMethod({
+    name: 'linear.issueRelationWrite',
+    params: LinearIssueRelationWrite,
+    handler: async (params, { runtime }) => runtime.linearIssueRelationWrite(params)
   }),
   defineMethod({
     name: 'linear.issueAddComment',

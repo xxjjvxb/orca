@@ -5,7 +5,6 @@ import type {
   LinearIssueCommentNode,
   LinearIssueContextResult,
   LinearIssueInclude,
-  LinearIssueRelation,
   LinearIssueRequest
 } from '../../shared/linear-agent-access'
 import {
@@ -13,7 +12,6 @@ import {
   LINEAR_CHILDREN_NODE_CAP,
   LINEAR_COMMENTS_CAP,
   LINEAR_COMMENT_BODY_CAP,
-  LINEAR_RELATIONS_CAP,
   clampLinearIssueDepth
 } from '../../shared/linear-agent-access'
 import { extractLinearInlineMedia } from '../../shared/linear-inline-media'
@@ -22,17 +20,16 @@ import { getRequiredEntry, withLinearRead } from './issue-context-client'
 import { getPublicFileUrlClient } from './client'
 import { includeErrorCode } from './issue-context-errors'
 import { readConnectionPages } from './issue-context-pagination'
+import { readIssueRelations } from './issue-context-relations'
 import {
   ATTACHMENTS_QUERY,
   CHILDREN_QUERY,
   COMMENTS_QUERY,
-  RELATIONS_QUERY,
   collectionMeta,
   mapIssue,
   type RawAttachmentsResponse,
   type RawChildrenResponse,
-  type RawCommentsResponse,
-  type RawRelationsResponse
+  type RawCommentsResponse
 } from './issue-context-raw'
 
 export async function readOptionalIncludes(
@@ -108,7 +105,7 @@ async function assignRelations(
   result: LinearIssueContextResult,
   sections: LinearIssueContextResult['meta']['sections']
 ): Promise<void> {
-  const read = await readRelations(resolved)
+  const read = await readIssueRelations(resolved)
   result.relations = read.items
   sections.relations = read.meta
 }
@@ -246,36 +243,5 @@ async function readAttachments(
   return {
     items,
     meta: collectionMeta(items.length, LINEAR_ATTACHMENTS_CAP, response.hasMore)
-  }
-}
-
-async function readRelations(
-  resolved: ResolvedIssue
-): Promise<{ items: LinearIssueRelation[]; meta: LinearCollectionMeta }> {
-  const entry = getRequiredEntry(resolved.workspace.id)
-  const response = await readConnectionPages(LINEAR_RELATIONS_CAP, async (page) => {
-    return await withLinearRead(entry, async () => {
-      const raw = await entry.client.client.rawRequest<
-        RawRelationsResponse,
-        Record<string, unknown>
-      >(RELATIONS_QUERY, { id: resolved.issue.id, ...page })
-      return raw.data?.issue?.relations ?? null
-    })
-  })
-  const items = response.nodes.slice(0, LINEAR_RELATIONS_CAP).map((node) => ({
-    id: node.id,
-    type: node.type,
-    relatedIssue: node.relatedIssue
-      ? {
-          id: node.relatedIssue.id,
-          identifier: node.relatedIssue.identifier,
-          title: node.relatedIssue.title,
-          url: node.relatedIssue.url
-        }
-      : null
-  }))
-  return {
-    items,
-    meta: collectionMeta(items.length, LINEAR_RELATIONS_CAP, response.hasMore)
   }
 }

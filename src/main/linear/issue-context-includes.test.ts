@@ -5,6 +5,7 @@ import {
   ATTACHMENTS_QUERY,
   CHILDREN_QUERY,
   COMMENTS_QUERY,
+  INVERSE_RELATIONS_QUERY,
   RELATIONS_QUERY
 } from './issue-context-raw'
 
@@ -117,7 +118,13 @@ describe('Linear issue context includes', () => {
   })
 
   it('declares cursor variables on every paged include query', () => {
-    for (const query of [COMMENTS_QUERY, CHILDREN_QUERY, ATTACHMENTS_QUERY, RELATIONS_QUERY]) {
+    for (const query of [
+      COMMENTS_QUERY,
+      CHILDREN_QUERY,
+      ATTACHMENTS_QUERY,
+      RELATIONS_QUERY,
+      INVERSE_RELATIONS_QUERY
+    ]) {
       expect(query).toContain('$after: String')
       expect(query).toContain('after: $after')
     }

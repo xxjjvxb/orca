@@ -5,6 +5,7 @@ import type {
   LinearIssueContextResult,
   LinearIssueListResult,
   LinearIssueTaskUpdateResult,
+  LinearIssueRelationWriteResult,
   LinearProjectListResult,
   LinearSearchResult,
   LinearStatusSetResult,
@@ -100,6 +101,20 @@ export function isLinearTaskUpdateResult(result: unknown): result is LinearIssue
     isRecord(result.meta) &&
     typeof result.operation === 'string' &&
     typeof result.meta.alreadySet === 'boolean'
+  )
+}
+
+export function isLinearRelationWriteResult(
+  result: unknown
+): result is LinearIssueRelationWriteResult {
+  return (
+    isRecord(result) &&
+    isRecord(result.issue) &&
+    isRecord(result.relatedIssue) &&
+    isRecord(result.relation) &&
+    isRecord(result.meta) &&
+    (result.operation === 'add' || result.operation === 'remove') &&
+    typeof result.relation.relationship === 'string'
   )
 }
 

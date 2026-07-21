@@ -2,6 +2,7 @@ import type {
   LinearIssueContextResult,
   LinearIssueListResult,
   LinearIssueTaskUpdateResult,
+  LinearIssueRelationWriteResult,
   LinearProjectListResult,
   LinearSearchIssueSummary,
   LinearSearchResult,
@@ -28,6 +29,7 @@ import {
   isLinearSearchResult,
   isLinearStatusSetResult,
   isLinearTaskUpdateResult,
+  isLinearRelationWriteResult,
   isLinearTeamLabelsResult,
   isLinearTeamListResult,
   isLinearTeamMembersResult,
@@ -73,6 +75,9 @@ export function formatRemoteLinearCli(result: unknown): { stdout: string; stderr
   }
   if (isLinearTaskUpdateResult(result)) {
     return { stdout: `${formatLinearTaskUpdate(result)}\n`, stderr: '' }
+  }
+  if (isLinearRelationWriteResult(result)) {
+    return { stdout: `${formatLinearRelationWrite(result)}\n`, stderr: '' }
   }
   if (isLinearCommentAddResult(result)) {
     return { stdout: `${formatLinearCommentAdd(result)}\n`, stderr: '' }
@@ -196,6 +201,12 @@ function formatLinearStatusSet(result: LinearStatusSetResult): string {
 function formatLinearTaskUpdate(result: LinearIssueTaskUpdateResult): string {
   const suffix = result.meta.alreadySet ? ' (already set)' : ''
   return `Updated ${result.issue.identifier} ${taskOperationLabel(result.operation)}${suffix}.`
+}
+
+function formatLinearRelationWrite(result: LinearIssueRelationWriteResult): string {
+  const verb = result.operation === 'add' ? 'Added' : 'Removed'
+  const suffix = result.meta.alreadySet ? ' (already set)' : ''
+  return `${verb} ${result.issue.identifier} ${result.relation.relationship} ${result.relatedIssue.identifier}${suffix}.`
 }
 
 function formatLinearCommentAdd(result: LinearCommentAddResult): string {

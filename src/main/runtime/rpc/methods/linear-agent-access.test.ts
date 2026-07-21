@@ -15,6 +15,7 @@ describe('Linear agent access RPC methods', () => {
     const runtime = {
       getRuntimeId: () => 'test-runtime',
       linearIssueSetState: vi.fn().mockResolvedValue({ ok: true }),
+      linearIssueRelationWrite: vi.fn().mockResolvedValue({ ok: true }),
       linearTeamListForAgents: vi.fn().mockResolvedValue({ ok: true }),
       linearTeamMembersForAgents: vi.fn().mockResolvedValue({ ok: true }),
       linearTeamStatesForAgents: vi.fn().mockResolvedValue({ ok: true }),
@@ -70,6 +71,15 @@ describe('Linear agent access RPC methods', () => {
         workspaceId: 'workspace-1'
       })
     )
+    const relationResponse = await dispatcher.dispatch(
+      makeRequest('linear.issueRelationWrite', {
+        input: 'ENG-1',
+        relatedInput: 'ENG-2',
+        relationship: 'blockedBy',
+        operation: 'add',
+        workspaceId: 'workspace-1'
+      })
+    )
     const commentResponse = await dispatcher.dispatch(
       makeRequest('linear.issueAddComment', {
         input: 'ENG-1',
@@ -109,6 +119,7 @@ describe('Linear agent access RPC methods', () => {
     expect(issueListResponse.ok).toBe(true)
     expect(projectListResponse.ok).toBe(true)
     expect(taskUpdateResponse.ok).toBe(true)
+    expect(relationResponse.ok).toBe(true)
     expect(commentResponse.ok).toBe(true)
     expect(attachResponse.ok).toBe(true)
     expect(createResponse.ok).toBe(true)
@@ -145,6 +156,13 @@ describe('Linear agent access RPC methods', () => {
       input: 'ENG-1',
       operation: 'dueDate',
       dueDate: '2026-06-30',
+      workspaceId: 'workspace-1'
+    })
+    expect(runtime.linearIssueRelationWrite).toHaveBeenCalledWith({
+      input: 'ENG-1',
+      relatedInput: 'ENG-2',
+      relationship: 'blockedBy',
+      operation: 'add',
       workspaceId: 'workspace-1'
     })
     expect(runtime.linearIssueAddComment).toHaveBeenCalledWith({

@@ -3,6 +3,27 @@ import { GLOBAL_FLAGS } from '../args'
 
 export const LINEAR_COMMAND_SPECS: CommandSpec[] = [
   {
+    path: ['linear', 'relation', 'add'],
+    summary: 'Add a Linear issue relation',
+    usage:
+      'orca linear relation add [<id>] [--current] --related <issue> --type blocks|blocked-by|related|duplicate-of [--workspace <id>] [--json]',
+    allowedFlags: [...GLOBAL_FLAGS, 'current', 'related', 'type', 'workspace', 'id'],
+    positionalArgs: ['id'],
+    examples: [
+      'orca linear relation add ENG-1 --related ENG-2 --type blocks --json',
+      'orca linear relation add --current --related ENG-2 --type blocked-by --json'
+    ]
+  },
+  {
+    path: ['linear', 'relation', 'remove'],
+    summary: 'Remove a Linear issue relation',
+    usage:
+      'orca linear relation remove [<id>] [--current] --related <issue> --type blocks|blocked-by|related|duplicate-of [--workspace <id>] [--json]',
+    allowedFlags: [...GLOBAL_FLAGS, 'current', 'related', 'type', 'workspace', 'id'],
+    positionalArgs: ['id'],
+    examples: ['orca linear relation remove ENG-1 --related ENG-2 --type related --json']
+  },
+  {
     path: ['linear', 'issue'],
     summary: 'Read Linear issue context for agents',
     usage:
