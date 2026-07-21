@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { defineMethod, type RpcMethod } from '../core'
 import { OptionalFiniteNumber, OptionalString, requiredString } from '../schemas'
 import { LINEAR_PROJECT_CREATE_METHOD } from './linear-project-create'
-import { LINEAR_ISSUE_LIST_METHOD } from './linear-issue-list-method'
+import { LINEAR_ISSUE_LIST_METHOD, LINEAR_MCP_ISSUE_LIST_METHOD } from './linear-issue-list-method'
 
 const VALID_CUSTOM_VIEW_MODELS = ['issue', 'project'] as const
 const LinearPriority = z.number().int().min(0).max(4).optional()
@@ -153,6 +153,7 @@ export const LINEAR_METHODS: RpcMethod[] = [
       runtime.linearSearchIssues(params.query, params.limit, params.workspaceId)
   }),
   LINEAR_ISSUE_LIST_METHOD,
+  LINEAR_MCP_ISSUE_LIST_METHOD,
   defineMethod({
     name: 'linear.createIssue',
     params: CreateIssue,

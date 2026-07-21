@@ -40,7 +40,7 @@ describe('SSH Linear MCP-compatible issue listing', () => {
     expect(dispatch).toHaveBeenCalledWith({
       id: expect.stringMatching(/^remote-cli-/),
       authToken: 'remote-cli',
-      method: 'linear.listIssues',
+      method: 'linear.mcpListIssues',
       params: {
         team: 'ENG',
         cycle: 'Cycle 1',

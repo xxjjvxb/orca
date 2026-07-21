@@ -117,7 +117,7 @@ describe('orca linear CLI handlers', () => {
     )
 
     expect(callMock).toHaveBeenCalledWith(
-      'linear.listIssues',
+      'linear.mcpListIssues',
       expect.objectContaining({
         team: 'ENG',
         assignee: 'me',

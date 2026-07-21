@@ -121,8 +121,12 @@ export function formatLinearMcpIssueList(result: LinearMcpIssueListResult): stri
 
 export function printLinearMcpIssueListWarnings(result: LinearMcpIssueListResult): void {
   if (result.meta.hasMore) {
+    const workspaceHint =
+      result.meta.nextCursor && result.meta.workspaceId !== 'all' && result.meta.workspaceId
+        ? `; continue with --workspace ${result.meta.workspaceId}`
+        : ''
     console.error(
-      `warning: more results available; next cursor: ${result.meta.nextCursor ?? 'n/a'}`
+      `warning: more results available; next cursor: ${result.meta.nextCursor ?? 'n/a'}${workspaceHint}`
     )
   }
   for (const error of result.meta.workspaceErrors) {

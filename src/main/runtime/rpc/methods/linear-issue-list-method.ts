@@ -32,7 +32,7 @@ const McpListIssues = z
     createdAt: OptionalString,
     updatedAt: OptionalString,
     includeArchived: z.boolean().optional(),
-    workspaceId: z.union([z.string(), z.literal('all')]).optional()
+    workspaceId: OptionalString
   })
   .strict()
 
@@ -49,6 +49,12 @@ export const LINEAR_ISSUE_LIST_METHOD = defineMethod({
       attributeFilter: params?.attributeFilter
     })
   }
+})
+
+export const LINEAR_MCP_ISSUE_LIST_METHOD = defineMethod({
+  name: 'linear.mcpListIssues',
+  params: McpListIssues,
+  handler: async (params, { runtime }) => runtime.linearMcpIssueList(params)
 })
 
 const MCP_ISSUE_LIST_KEYS = [

@@ -44,7 +44,7 @@ export async function dispatchRemoteLinearListIssues(
   return await dispatcher.dispatch({
     id: `remote-cli-${Date.now()}`,
     authToken: 'remote-cli',
-    method: 'linear.listIssues',
+    method: 'linear.mcpListIssues',
     params: request
   })
 }

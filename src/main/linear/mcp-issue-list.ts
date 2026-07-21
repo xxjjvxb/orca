@@ -53,7 +53,7 @@ const LIST_ISSUES_QUERY = `
 export async function listMcpIssues(
   request: LinearMcpIssueListRequest
 ): Promise<LinearMcpIssueListResult> {
-  if (request.cursor && request.workspaceId === 'all') {
+  if (request.cursor && (!request.workspaceId || request.workspaceId === 'all')) {
     throw linearError(
       'linear_invalid_workspace',
       'Cursor pagination requires a concrete Linear workspace.'
@@ -91,11 +91,11 @@ export async function listMcpIssues(
       limit,
       returned: issues.length,
       hasMore,
-      ...(hasMore && pages.length === 1 && pages[0].nextCursor
+      ...(hasMore && request.workspaceId !== 'all' && pages.length === 1 && pages[0].nextCursor
         ? { nextCursor: pages[0].nextCursor }
         : {}),
       orderBy,
-      workspaceId: request.workspaceId,
+      workspaceId: request.workspaceId === 'all' ? 'all' : entries[0].workspace.id,
       partial: failures.length > 0,
       workspaceErrors: failures.map(({ workspace, code, message }) => ({
         workspace,
@@ -196,10 +196,10 @@ function buildIssueFilter(request: LinearMcpIssueListRequest): Record<string, un
     filter.searchableContent = { contains: request.query }
   }
   if (request.state) {
-    filter.state = namedFilter(request.state)
+    filter.state = workflowStateFilter(request.state)
   }
   if (request.project) {
-    filter.project = nullableNamedFilter(request.project)
+    filter.project = nullableProjectFilter(request.project)
   }
   if (request.release) {
     filter.releases = { some: namedFilter(request.release, false, true) }
@@ -238,6 +238,21 @@ function namedFilter(value: string, includeKey = false, includeVersion = false):
 
 function nullableNamedFilter(value: string): object {
   return value === 'null' ? { null: true } : namedFilter(value)
+}
+
+function workflowStateFilter(value: string): object {
+  const filter = namedFilter(value) as { or: object[] }
+  filter.or.push({ type: { eqIgnoreCase: value } })
+  return filter
+}
+
+function nullableProjectFilter(value: string): object {
+  if (value === 'null') {
+    return { null: true }
+  }
+  const filter = namedFilter(value) as { or: object[] }
+  filter.or.push({ slugId: { eqIgnoreCase: value } })
+  return filter
 }
 
 function nullableIdFilter(value: string): object {

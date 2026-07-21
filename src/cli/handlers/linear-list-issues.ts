@@ -37,7 +37,7 @@ export const runLinearListIssues: CommandHandler = async ({ flags, client, json 
     includeArchived: flags.get('include-archived') === true,
     workspaceId: getOptionalStringFlag(flags, 'workspace')
   }
-  const response = await client.call<LinearMcpIssueListResult>('linear.listIssues', request)
+  const response = await client.call<LinearMcpIssueListResult>('linear.mcpListIssues', request)
   if (!json) {
     printLinearMcpIssueListWarnings(response.result)
   }

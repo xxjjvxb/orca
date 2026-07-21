@@ -65,7 +65,7 @@ describe('MCP-compatible Linear issue listing', () => {
     const result = await listMcpIssues({
       team: 'ENG',
       label: 'Bug',
-      state: 'In Progress',
+      state: 'started',
       assignee: 'me',
       project: 'Launch',
       priority: 2,
@@ -89,7 +89,13 @@ describe('MCP-compatible Linear issue listing', () => {
           searchableContent: { contains: 'auth' },
           priority: { eq: 2 },
           updatedAt: { gte: '-P7D' },
-          assignee: { isMe: { eq: true } }
+          assignee: { isMe: { eq: true } },
+          state: {
+            or: expect.arrayContaining([{ type: { eqIgnoreCase: 'started' } }])
+          },
+          project: {
+            or: expect.arrayContaining([{ slugId: { eqIgnoreCase: 'Launch' } }])
+          }
         })
       })
     )
@@ -112,12 +118,13 @@ describe('MCP-compatible Linear issue listing', () => {
     })
     const { listMcpIssues } = await import('./mcp-issue-list')
 
-    await listMcpIssues({ assignee: 'null', parentId: 'null', limit: 999 })
+    const result = await listMcpIssues({ assignee: 'null', parentId: 'null', limit: 999 })
 
     expect(rawRequest.mock.calls[0]?.[1]).toMatchObject({
       first: 250,
       filter: { assignee: { null: true }, parent: { null: true } }
     })
+    expect(result.meta.workspaceId).toBe('workspace-1')
   })
 
   it('fans out one bounded provider request per workspace concurrently', async () => {
@@ -219,6 +226,27 @@ describe('MCP-compatible Linear issue listing', () => {
       code: 'linear_invalid_workspace'
     })
     expect(rawRequest).not.toHaveBeenCalled()
+  })
+
+  it('requires a workspace for cursor replay and does not emit fanout cursors', async () => {
+    rawRequest.mockResolvedValue({
+      data: {
+        issues: {
+          nodes: [issueNode('issue-1', 'ENG-1', '2026-07-01T00:00:00.000Z')],
+          pageInfo: { hasNextPage: true, endCursor: 'workspace-cursor' }
+        }
+      }
+    })
+    const { listMcpIssues } = await import('./mcp-issue-list')
+
+    await expect(listMcpIssues({ cursor: 'next' })).rejects.toMatchObject({
+      code: 'linear_invalid_workspace'
+    })
+    const result = await listMcpIssues({ workspaceId: 'all' })
+
+    expect(result.meta).toMatchObject({ hasMore: true, workspaceId: 'all' })
+    expect(result.meta.nextCursor).toBeUndefined()
+    expect(rawRequest).toHaveBeenCalledTimes(1)
   })
 
   it('rejects unknown explicit workspaces instead of returning an empty list', async () => {
