@@ -20,11 +20,12 @@ export async function dispatchRemoteLinearListIssues(
   if (priority !== undefined && (priority < 0 || priority > 4)) {
     throw new RemoteCliArgumentError('invalid_argument', '--priority must be between 0 and 4')
   }
+  const limit = optionalPositiveInteger(parsed.flags, 'limit')
   const request: LinearMcpIssueListRequest = {
     team: optionalString(parsed.flags, 'team'),
     cycle: optionalString(parsed.flags, 'cycle'),
     label: optionalString(parsed.flags, 'label'),
-    limit: optionalInteger(parsed.flags, 'limit'),
+    limit,
     query: optionalString(parsed.flags, 'query'),
     state: optionalString(parsed.flags, 'state'),
     cursor: optionalString(parsed.flags, 'cursor'),
@@ -61,6 +62,21 @@ function optionalInteger(flags: Map<string, string | boolean>, name: string): nu
   const value = Number(raw)
   if (!Number.isInteger(value) || value < 0) {
     throw new RemoteCliArgumentError('invalid_argument', `--${name} must be an integer`)
+  }
+  return value
+}
+
+function optionalPositiveInteger(
+  flags: Map<string, string | boolean>,
+  name: string
+): number | undefined {
+  const raw = optionalString(flags, name)
+  if (raw === undefined) {
+    return undefined
+  }
+  const value = Number(raw)
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new RemoteCliArgumentError('invalid_argument', `Invalid positive integer for --${name}`)
   }
   return value
 }

@@ -59,11 +59,16 @@ describe('linear RPC methods', () => {
     )
     await dispatcher.dispatch(
       makeRequest('linear.listIssues', {
+        limit: 5,
+        workspaceId: 'workspace-1'
+      })
+    )
+    await dispatcher.dispatch(
+      makeRequest('linear.listIssues', {
         team: 'ENG',
         assignee: 'me',
         cursor: 'next',
         orderBy: 'updatedAt',
-        includeArchived: false,
         workspaceId: 'workspace-1'
       })
     )
@@ -116,12 +121,14 @@ describe('linear RPC methods', () => {
     expect(runtime.linearListIssues).toHaveBeenCalledWith('assigned', 20, 'workspace-1', {
       attributeFilter: undefined
     })
+    expect(runtime.linearListIssues).toHaveBeenCalledWith(undefined, 5, 'workspace-1', {
+      attributeFilter: undefined
+    })
     expect(runtime.linearMcpIssueList).toHaveBeenCalledWith({
       team: 'ENG',
       assignee: 'me',
       cursor: 'next',
       orderBy: 'updatedAt',
-      includeArchived: false,
       workspaceId: 'workspace-1'
     })
     expect(runtime.linearGetIssue).toHaveBeenCalledWith('issue-3', 'workspace-1')

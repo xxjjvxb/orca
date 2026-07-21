@@ -1,22 +1,45 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const rawRequest = vi.fn()
+const getClients = vi.fn()
+const getStatus = vi.fn()
+const acquire = vi.fn()
+const release = vi.fn()
+const clearToken = vi.fn()
+
+const workspace = (id: string, organizationName: string) => ({
+  id,
+  organizationId: id,
+  organizationName,
+  displayName: 'Ada',
+  email: null
+})
+
+const clientEntry = (
+  id: string,
+  organizationName: string,
+  request: ReturnType<typeof vi.fn> = rawRequest
+) => ({
+  workspace: workspace(id, organizationName),
+  client: { client: { rawRequest: request } }
+})
 
 vi.mock('./client', () => ({
-  acquire: vi.fn(),
-  release: vi.fn(),
-  clearToken: vi.fn(),
-  isAuthError: () => false,
-  getClients: () => [
-    {
-      workspace: { id: 'workspace-1', organizationName: 'Acme' },
-      client: { client: { rawRequest } }
-    }
-  ]
+  acquire,
+  release,
+  clearToken,
+  getClients,
+  getStatus,
+  isAuthError: () => false
 }))
 
 describe('MCP-compatible Linear issue listing', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    vi.clearAllMocks()
+    const entry = clientEntry('workspace-1', 'Acme')
+    getClients.mockReturnValue([entry])
+    getStatus.mockReturnValue({ workspaces: [entry.workspace] })
+  })
 
   it('passes rich filters, ordering, archive scope, and cursor to Linear', async () => {
     rawRequest.mockResolvedValue({
@@ -96,4 +119,127 @@ describe('MCP-compatible Linear issue listing', () => {
       filter: { assignee: { null: true }, parent: { null: true } }
     })
   })
+
+  it('fans out one bounded provider request per workspace concurrently', async () => {
+    const firstRequest = vi.fn()
+    const secondRequest = vi.fn()
+    let resolveFirst: ((value: unknown) => void) | undefined
+    let resolveSecond: ((value: unknown) => void) | undefined
+    firstRequest.mockImplementation(
+      () => new Promise((resolve) => (resolveFirst = resolve as (value: unknown) => void))
+    )
+    secondRequest.mockImplementation(
+      () => new Promise((resolve) => (resolveSecond = resolve as (value: unknown) => void))
+    )
+    const firstEntry = clientEntry('workspace-1', 'Acme', firstRequest)
+    const secondEntry = clientEntry('workspace-2', 'Beta', secondRequest)
+    getStatus.mockReturnValue({ workspaces: [firstEntry.workspace, secondEntry.workspace] })
+    getClients.mockImplementation((workspaceId) => {
+      if (workspaceId === 'workspace-1') {
+        return [firstEntry]
+      }
+      if (workspaceId === 'workspace-2') {
+        return [secondEntry]
+      }
+      return []
+    })
+    const { listMcpIssues } = await import('./mcp-issue-list')
+
+    const pending = listMcpIssues({ limit: 1, workspaceId: 'all' })
+    await vi.waitFor(() => {
+      expect(firstRequest).toHaveBeenCalledTimes(1)
+      expect(secondRequest).toHaveBeenCalledTimes(1)
+    })
+    resolveFirst?.({
+      data: {
+        issues: {
+          nodes: [issueNode('issue-1', 'ENG-1', '2026-07-01T00:00:00.000Z')],
+          pageInfo: { hasNextPage: false, endCursor: 'first-cursor' }
+        }
+      }
+    })
+    resolveSecond?.({
+      data: {
+        issues: {
+          nodes: [issueNode('issue-2', 'OPS-1', '2026-07-02T00:00:00.000Z')],
+          pageInfo: { hasNextPage: false, endCursor: 'second-cursor' }
+        }
+      }
+    })
+
+    const result = await pending
+    expect(result.issues.map((issue) => issue.identifier)).toEqual(['OPS-1'])
+    expect(result.meta).toMatchObject({ returned: 1, hasMore: true, partial: false })
+    expect(result.meta.nextCursor).toBeUndefined()
+    expect(firstRequest.mock.calls[0]?.[1]).toMatchObject({ first: 1 })
+    expect(secondRequest.mock.calls[0]?.[1]).toMatchObject({ first: 1 })
+  })
+
+  it('returns healthy workspace results with a classified partial failure', async () => {
+    const healthyRequest = vi.fn().mockResolvedValue({
+      data: {
+        issues: {
+          nodes: [issueNode('issue-1', 'ENG-1', '2026-07-01T00:00:00.000Z')],
+          pageInfo: { hasNextPage: false }
+        }
+      }
+    })
+    const failedRequest = vi.fn().mockRejectedValue(new Error('429 rate limit exceeded'))
+    const healthy = clientEntry('workspace-1', 'Acme', healthyRequest)
+    const failed = clientEntry('workspace-2', 'Beta', failedRequest)
+    getStatus.mockReturnValue({ workspaces: [healthy.workspace, failed.workspace] })
+    getClients.mockImplementation((workspaceId) => {
+      if (workspaceId === 'workspace-1') {
+        return [healthy]
+      }
+      if (workspaceId === 'workspace-2') {
+        return [failed]
+      }
+      return []
+    })
+    const { listMcpIssues } = await import('./mcp-issue-list')
+
+    const result = await listMcpIssues({ workspaceId: 'all' })
+
+    expect(result.issues.map((issue) => issue.identifier)).toEqual(['ENG-1'])
+    expect(result.meta).toMatchObject({ partial: true, returned: 1 })
+    expect(result.meta.workspaceErrors).toEqual([
+      {
+        workspace: { id: 'workspace-2', name: 'Beta' },
+        code: 'linear_rate_limited',
+        message: '429 rate limit exceeded'
+      }
+    ])
+  })
+
+  it('rejects workspace-specific cursors for all-workspace reads with a useful code', async () => {
+    const { listMcpIssues } = await import('./mcp-issue-list')
+
+    await expect(listMcpIssues({ cursor: 'next', workspaceId: 'all' })).rejects.toMatchObject({
+      code: 'linear_invalid_workspace'
+    })
+    expect(rawRequest).not.toHaveBeenCalled()
+  })
+
+  it('rejects unknown explicit workspaces instead of returning an empty list', async () => {
+    getClients.mockReturnValue([])
+    const { listMcpIssues } = await import('./mcp-issue-list')
+
+    await expect(listMcpIssues({ workspaceId: 'workspace-missing' })).rejects.toMatchObject({
+      code: 'linear_invalid_workspace'
+    })
+    expect(rawRequest).not.toHaveBeenCalled()
+  })
 })
+
+function issueNode(id: string, identifier: string, updatedAt: string) {
+  return {
+    id,
+    identifier,
+    title: `Issue ${identifier}`,
+    url: `https://linear.app/acme/issue/${identifier}`,
+    labels: { nodes: [] },
+    createdAt: updatedAt,
+    updatedAt
+  }
+}

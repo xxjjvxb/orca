@@ -2,9 +2,16 @@ import type {
   LinearMcpIssueListRequest,
   LinearMcpIssueListResult
 } from '../../shared/linear-agent-access'
-import { acquire, clearToken, getClients, isAuthError, release } from './client'
-import { classifyLinearError, linearMessage } from './issue-context-errors'
+import { getClients, getStatus, type LinearClientForWorkspace } from './client'
+import { withLinearRead } from './issue-context-client'
+import { linearError } from './issue-context-errors'
+import {
+  getFanoutClientEntries,
+  workspaceFailure,
+  type WorkspaceReadFailure
+} from './issue-context-fanout'
 import { ISSUE_FIELDS, mapIssue, type RawIssue } from './issue-context-raw'
+import { resolveWorkspaceSelector } from './issue-context-workspaces'
 
 const LIST_ISSUES_DEFAULT_LIMIT = 50
 const LIST_ISSUES_MAX_LIMIT = 250
@@ -14,6 +21,12 @@ type RawListIssuesResponse = {
     nodes?: RawIssue[]
     pageInfo?: { hasNextPage?: boolean; endCursor?: string | null }
   } | null
+}
+
+type WorkspaceIssuePage = {
+  issues: LinearMcpIssueListResult['issues']
+  hasMore: boolean
+  nextCursor?: string
 }
 
 const LIST_ISSUES_QUERY = `
@@ -41,56 +54,31 @@ export async function listMcpIssues(
   request: LinearMcpIssueListRequest
 ): Promise<LinearMcpIssueListResult> {
   if (request.cursor && request.workspaceId === 'all') {
-    throw new Error('Cursor pagination requires a concrete Linear workspace.')
+    throw linearError(
+      'linear_invalid_workspace',
+      'Cursor pagination requires a concrete Linear workspace.'
+    )
   }
   const limit = clampLimit(request.limit)
   const orderBy = request.orderBy ?? 'updatedAt'
-  const entries = getClients(request.workspaceId)
-  const issues: LinearMcpIssueListResult['issues'] = []
-  const workspaceErrors: LinearMcpIssueListResult['meta']['workspaceErrors'] = []
-  let hasMore = false
-  let nextCursor: string | undefined
-
-  for (const entry of entries) {
-    await acquire()
-    try {
-      const raw = await entry.client.client.rawRequest<
-        RawListIssuesResponse,
-        Record<string, unknown>
-      >(LIST_ISSUES_QUERY, {
-        first: limit,
-        after: request.cursor,
-        filter: buildIssueFilter(request),
-        orderBy,
-        includeArchived: request.includeArchived ?? false
-      })
-      const connection = raw.data?.issues
-      issues.push(
-        ...(connection?.nodes ?? []).map((issue) => ({
-          ...mapIssue(issue),
-          workspace: { id: entry.workspace.id, name: entry.workspace.organizationName }
-        }))
-      )
-      hasMore ||= connection?.pageInfo?.hasNextPage === true
-      if (entries.length === 1) {
-        nextCursor = connection?.pageInfo?.endCursor ?? undefined
-      }
-    } catch (error) {
-      if (isAuthError(error)) {
-        clearToken(entry.workspace.id)
-      }
-      if (request.workspaceId !== 'all') {
-        throw error
-      }
-      workspaceErrors.push({
-        workspace: { id: entry.workspace.id, name: entry.workspace.organizationName },
-        code: classifyLinearError(error),
-        message: linearMessage(error)
-      })
-    } finally {
-      release()
+  const { entries, failures: entryFailures } = getIssueListEntries(request.workspaceId)
+  if (entries.length === 0) {
+    if (entryFailures[0]) {
+      throw entryFailures[0].error
     }
+    throw linearError('linear_not_connected', 'Linear is not connected.', {
+      nextSteps: ['Connect Linear from Orca settings, then retry the issue list.']
+    })
   }
+  const { pages, failures } = await readIssueListWorkspaces(
+    entries,
+    request,
+    limit,
+    orderBy,
+    entryFailures
+  )
+  const issues = pages.flatMap((page) => page.issues)
+  let hasMore = pages.some((page) => page.hasMore)
 
   issues.sort((left, right) => compareIssues(left, right, orderBy))
   if (issues.length > limit) {
@@ -103,13 +91,94 @@ export async function listMcpIssues(
       limit,
       returned: issues.length,
       hasMore,
-      ...(hasMore && nextCursor ? { nextCursor } : {}),
+      ...(hasMore && pages.length === 1 && pages[0].nextCursor
+        ? { nextCursor: pages[0].nextCursor }
+        : {}),
       orderBy,
       workspaceId: request.workspaceId,
-      partial: workspaceErrors.length > 0,
-      workspaceErrors
+      partial: failures.length > 0,
+      workspaceErrors: failures.map(({ workspace, code, message }) => ({
+        workspace,
+        code,
+        message
+      }))
     }
   }
+}
+
+function getIssueListEntries(workspaceId?: string | 'all'): {
+  entries: LinearClientForWorkspace[]
+  failures: WorkspaceReadFailure[]
+} {
+  if (workspaceId === 'all') {
+    return getFanoutClientEntries()
+  }
+  if (workspaceId) {
+    resolveWorkspaceSelector({ workspaceId }, getStatus().workspaces ?? [])
+  }
+  return { entries: getClients(workspaceId), failures: [] }
+}
+
+async function readIssueListWorkspaces(
+  entries: LinearClientForWorkspace[],
+  request: LinearMcpIssueListRequest,
+  limit: number,
+  orderBy: 'createdAt' | 'updatedAt',
+  initialFailures: WorkspaceReadFailure[]
+): Promise<{ pages: WorkspaceIssuePage[]; failures: WorkspaceReadFailure[] }> {
+  if (request.workspaceId !== 'all') {
+    return {
+      pages: [await readIssueListWorkspace(entries[0], request, limit, orderBy)],
+      failures: []
+    }
+  }
+
+  const settled = await Promise.allSettled(
+    entries.map((entry) => readIssueListWorkspace(entry, request, limit, orderBy))
+  )
+  const pages: WorkspaceIssuePage[] = []
+  const failures = [...initialFailures]
+  for (let index = 0; index < settled.length; index += 1) {
+    const result = settled[index]
+    if (result.status === 'fulfilled') {
+      pages.push(result.value)
+      continue
+    }
+    failures.push(workspaceFailure(entries[index].workspace, result.reason))
+  }
+  if (pages.length === 0 && failures.length === entries.length + initialFailures.length) {
+    throw failures[0].error
+  }
+  return { pages, failures }
+}
+
+async function readIssueListWorkspace(
+  entry: LinearClientForWorkspace,
+  request: LinearMcpIssueListRequest,
+  limit: number,
+  orderBy: 'createdAt' | 'updatedAt'
+): Promise<WorkspaceIssuePage> {
+  return await withLinearRead(entry, async () => {
+    const raw = await entry.client.client.rawRequest<
+      RawListIssuesResponse,
+      Record<string, unknown>
+    >(LIST_ISSUES_QUERY, {
+      first: limit,
+      after: request.cursor,
+      filter: buildIssueFilter(request),
+      orderBy,
+      includeArchived: request.includeArchived ?? false
+    })
+    const connection = raw.data?.issues
+    return {
+      issues: (connection?.nodes ?? []).map((issue) => ({
+        ...mapIssue(issue),
+        workspace: { id: entry.workspace.id, name: entry.workspace.organizationName }
+      })),
+      hasMore: connection?.pageInfo?.hasNextPage === true,
+      nextCursor: connection?.pageInfo?.endCursor ?? undefined
+    }
+  })
 }
 
 function buildIssueFilter(request: LinearMcpIssueListRequest): Record<string, unknown> {

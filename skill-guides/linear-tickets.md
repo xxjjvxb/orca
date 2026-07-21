@@ -72,6 +72,7 @@ Do not use `orca linear attach` to read screenshots. That command creates link a
 
 ```bash
 orca linear issue [<id>] [--current] [--comments] [--children] [--depth <n>] [--attachments] [--relations] [--full] [--workspace <id>] [--json]
+orca linear list-issues [--team <team>] [--cycle <cycle>] [--label <label>] [--limit <n>] [--query <text>] [--state <state>] [--cursor <cursor>] [--order-by createdAt|updatedAt] [--project <project>] [--release <release>] [--assignee <user|me|null>] [--delegate <user|me|null>] [--parent-id <issue|null>] [--priority <0-4>] [--created-at <datetime|duration>] [--updated-at <datetime|duration>] [--include-archived] [--workspace <id>|all] [--json]
 orca linear search <query> [--limit <n>] [--workspace <id>|all] [--json]
 orca linear team list [--workspace <id>|all] [--json]
 orca linear team members --team <key|id> [--workspace <id>] [--json]
@@ -116,6 +117,8 @@ Use task listing for queue-style work:
 orca linear list --filter assigned --limit 10 --workspace all --json
 orca linear list --filter open --team <key-or-id> --workspace <workspaceId> --json
 ```
+
+Use `list-issues` when MCP-compatible filters or cursor pagination are needed. A cursor is workspace-specific, so combine `--cursor` with a concrete `--workspace` rather than `all`.
 
 Prefer `label add` and `label remove` for incremental edits. `label set` replaces the full label set and should be used only when deliberate cleanup is intended.
 
