@@ -24363,6 +24363,9 @@ export class OrcaRuntimeService {
   }
 
   async linearSaveIssue(params: LinearSaveIssueRequest): Promise<LinearSaveIssueResult> {
+    if ((params.description?.length ?? 0) > LINEAR_WRITE_BODY_CAP) {
+      throw linearError('linear_body_too_large', 'Linear issue body is too large.')
+    }
     if (!params.input && !params.current) {
       if (!params.title || !params.team) {
         throw linearError(
@@ -24397,28 +24400,37 @@ export class OrcaRuntimeService {
     if (Object.keys(fields).length === 0) {
       throw linearError('linear_write_failed', 'No issue fields were provided to save.')
     }
-    const updated = await this.runLinearAgentWrite(
-      async (signal) => {
-        const saved = await updateLinearIssueForAgent(target.issue.id, fields, target.workspaceId, {
-          signal
-        })
-        if (!this.linearSavedIssueMatchesIntent(saved, fields)) {
-          throw new LinearWriteFailure('unconfirmed', 'Linear issue save could not be confirmed.')
-        }
-        return saved
-      },
-      (cause) =>
-        linearError(
-          'linear_write_unconfirmed',
-          'Linear may have applied the issue save, but Orca could not confirm it.',
-          {
-            nextSteps: [
-              `Run \`orca linear issue ${target.issue.identifier} --workspace ${target.workspaceId} --json\` before retrying.`
-            ],
-            ...(cause ? { cause } : {})
-          }
+    const alreadySet = this.linearSavedIssueMatchesIntent(current, fields)
+    const updated = alreadySet
+      ? current
+      : await this.runLinearAgentWrite(
+          async (signal) => {
+            const saved = await updateLinearIssueForAgent(
+              target.issue.id,
+              fields,
+              target.workspaceId,
+              { signal }
+            )
+            if (!this.linearSavedIssueMatchesIntent(saved, fields)) {
+              throw new LinearWriteFailure(
+                'unconfirmed',
+                'Linear issue save could not be confirmed.'
+              )
+            }
+            return saved
+          },
+          (cause) =>
+            linearError(
+              'linear_write_unconfirmed',
+              'Linear may have applied the issue save, but Orca could not confirm it.',
+              {
+                nextSteps: [
+                  `Run \`orca linear issue ${target.issue.identifier} --workspace ${target.workspaceId} --json\` before retrying.`
+                ],
+                ...(cause ? { cause } : {})
+              }
+            )
         )
-    )
     await this.notifyLinearLinkedIssueUpdated(target.workspaceId, target.issue.identifier)
     return {
       issue: updated,
@@ -24952,6 +24964,10 @@ export class OrcaRuntimeService {
     if (input.toLocaleLowerCase() === 'me') {
       return (await this.getLinearViewerForWrite(workspaceId)).id
     }
+    // Why: caller-supplied IDs were accepted directly before save-issue; avoid a paginated member scan on that existing fast path.
+    if (isLinearUuid(input)) {
+      return input
+    }
     let members: Awaited<ReturnType<typeof getLinearTeamMembersOrThrow>>
     try {
       members = await getLinearTeamMembersOrThrow(teamId, workspaceId)
@@ -24962,7 +24978,9 @@ export class OrcaRuntimeService {
     const matches = members.filter(
       (member) =>
         member.id.toLocaleLowerCase() === normalized ||
-        member.displayName.toLocaleLowerCase() === normalized
+        member.displayName.toLocaleLowerCase() === normalized ||
+        member.name?.toLocaleLowerCase() === normalized ||
+        member.email?.toLocaleLowerCase() === normalized
     )
     if (matches.length === 1) {
       return matches[0].id
