@@ -89,7 +89,8 @@ export type {
   LinearUserSummary,
   LinearWorkspaceCandidate,
   LinearWriteIssueRef,
-  LinearIssueTaskUpdateResult
+  LinearIssueTaskUpdateResult,
+  LinearSaveIssueResult
 } from './linear-agent-result-types'
 export type { LinearInlineMedia } from './linear-inline-media'
 
@@ -164,6 +165,21 @@ export type LinearCreateRequest = {
   workspaceId?: string
   writeId?: string
   context?: LinearCurrentIssueContextHints
+}
+
+export type LinearSaveIssueRequest = LinearWriteTargetRequest & {
+  team?: string
+  title?: string
+  description?: string
+  state?: string
+  assignee?: string | null
+  priority?: number
+  estimate?: number | null
+  dueDate?: string | null
+  labels?: string[]
+  project?: string | null
+  parentId?: string | null
+  writeId?: string
 }
 
 export function clampLinearSearchLimit(limit: number | undefined): number {

@@ -3,6 +3,43 @@ import { GLOBAL_FLAGS } from '../args'
 
 export const LINEAR_COMMAND_SPECS: CommandSpec[] = [
   {
+    path: ['linear', 'save-issue'],
+    summary: 'Create or update a Linear issue',
+    usage:
+      'orca linear save-issue [<id>] [--current] [--team <key|id>] [--title <title>] [--description <text> | --body-file <path|->] [--state <state>] [--assignee me|<user>|null] [--priority none|low|medium|high|urgent] [--estimate <number>|null] [--due-date <yyyy-mm-dd>|null] [--label <label>...] [--project <project>|null] [--parent-id <issue>|null] [--write-id <uuid>] [--workspace <id>] [--json]',
+    allowedFlags: [
+      ...GLOBAL_FLAGS,
+      'current',
+      'team',
+      'title',
+      'description',
+      'body',
+      'body-file',
+      'state',
+      'assignee',
+      'priority',
+      'estimate',
+      'due-date',
+      'label',
+      'project',
+      'parent-id',
+      'write-id',
+      'workspace',
+      'id'
+    ],
+    positionalArgs: ['id'],
+    examples: [
+      'orca linear save-issue --team ENG --title "Fix auth" --priority high --json',
+      'orca linear save-issue ENG-123 --title "Fix OAuth callback" --assignee me --json',
+      'orca linear save-issue --current --project null --due-date null --json'
+    ],
+    notes: [
+      'Without <id> or --current, creates an issue and requires --team and --title.',
+      'Labels replace the complete label set, matching Linear MCP save_issue semantics.',
+      'Use the literal null to clear assignee, estimate, due date, project, or parent.'
+    ]
+  },
+  {
     path: ['linear', 'issue'],
     summary: 'Read Linear issue context for agents',
     usage:

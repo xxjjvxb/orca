@@ -24,6 +24,7 @@ describe('Linear agent access RPC methods', () => {
       linearIssueUpdateTask: vi.fn().mockResolvedValue({ ok: true }),
       linearIssueAddComment: vi.fn().mockResolvedValue({ ok: true }),
       linearIssueAttachLink: vi.fn().mockResolvedValue({ ok: true }),
+      linearSaveIssue: vi.fn().mockResolvedValue({ ok: true }),
       linearIssueCreate: vi.fn().mockResolvedValue({ ok: true })
     } as unknown as OrcaRuntimeService
     const dispatcher = new RpcDispatcher({ runtime, methods: LINEAR_AGENT_ACCESS_METHODS })
@@ -100,6 +101,16 @@ describe('Linear agent access RPC methods', () => {
         workspaceId: 'workspace-1'
       })
     )
+    const saveResponse = await dispatcher.dispatch(
+      makeRequest('linear.saveIssue', {
+        input: 'ENG-1',
+        title: 'Updated title',
+        assignee: null,
+        labels: ['Bug'],
+        project: null,
+        workspaceId: 'workspace-1'
+      })
+    )
 
     expect(setStateResponse.ok).toBe(true)
     expect(teamListResponse.ok).toBe(true)
@@ -112,6 +123,7 @@ describe('Linear agent access RPC methods', () => {
     expect(commentResponse.ok).toBe(true)
     expect(attachResponse.ok).toBe(true)
     expect(createResponse.ok).toBe(true)
+    expect(saveResponse.ok).toBe(true)
     expect(runtime.linearIssueSetState).toHaveBeenCalledWith({
       input: 'ENG-1',
       to: 'In Review',
@@ -170,6 +182,15 @@ describe('Linear agent access RPC methods', () => {
       parentInput: 'ENG-1',
       writeId: '33333333-3333-4333-8333-333333333333',
       workspaceId: 'workspace-1'
+    })
+    expect(runtime.linearSaveIssue).toHaveBeenCalledWith({
+      input: 'ENG-1',
+      title: 'Updated title',
+      assignee: null,
+      labels: ['Bug'],
+      project: null,
+      workspaceId: 'workspace-1',
+      writeId: undefined
     })
   })
 
@@ -289,6 +310,7 @@ type LinearUnconfirmedBuilder = {
   ): Error & { data?: { cause?: string; nextSteps?: string[] } }
   resolveLinearAgentState(input: string, states: unknown[]): unknown | null
   linearCreatedIssueMatchesIntent(issue: unknown, intent: unknown): boolean
+  linearSavedIssueMatchesIntent(issue: unknown, intent: unknown): boolean
   notifyLinearLinkedIssueUpdated(workspaceId: string, identifier: string): Promise<void>
   listResolvedWorktrees(): Promise<unknown[]>
 }
@@ -508,6 +530,43 @@ describe('Linear agent write recovery helpers', () => {
         projectId: 'project-2'
       })
     ).toBe(false)
+  })
+
+  it('confirms save-issue updates including explicit relationship clears', () => {
+    const runtime = new OrcaRuntimeService()
+    const builder = runtime as unknown as LinearUnconfirmedBuilder
+    const issue = {
+      id: 'issue-2',
+      identifier: 'ENG-2',
+      title: 'Updated title',
+      description: 'Updated description',
+      url: 'https://example.invalid/ENG-2',
+      team: { id: 'team-1', key: 'ENG', name: 'Engineering' },
+      state: { id: 'state-review', name: 'In Review' },
+      parent: null,
+      project: null,
+      assignee: null,
+      priority: 2,
+      estimate: null,
+      dueDate: null,
+      labelIds: ['label-1']
+    }
+
+    expect(
+      builder.linearSavedIssueMatchesIntent(issue, {
+        title: 'Updated title',
+        description: 'Updated description',
+        stateId: 'state-review',
+        parentId: null,
+        projectId: null,
+        assigneeId: null,
+        priority: 2,
+        estimate: null,
+        dueDate: null,
+        labelIds: ['label-1']
+      })
+    ).toBe(true)
+    expect(builder.linearSavedIssueMatchesIntent(issue, { projectId: 'project-2' })).toBe(false)
   })
 
   it('resolves workflow states by UUID or case-insensitive exact name', () => {

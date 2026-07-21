@@ -123,6 +123,21 @@ const LinearIssueCreate = z.object({
   context: LinearCurrentContext
 })
 
+const LinearSaveIssue = LinearWriteTarget.extend({
+  team: OptionalString,
+  title: OptionalString,
+  description: z.string().optional(),
+  state: OptionalString,
+  assignee: z.string().nullable().optional(),
+  priority: z.number().int().min(0).max(4).optional(),
+  estimate: z.number().min(0).nullable().optional(),
+  dueDate: OptionalLinearDueDateOrClear,
+  labels: z.array(z.string()).optional(),
+  project: z.string().nullable().optional(),
+  parentId: z.string().nullable().optional(),
+  writeId: OptionalString
+})
+
 function parseLinearWriteId(writeId: string | undefined): string | undefined {
   if (writeId === undefined) {
     return undefined
@@ -134,6 +149,12 @@ function parseLinearWriteId(writeId: string | undefined): string | undefined {
 }
 
 export const LINEAR_AGENT_ACCESS_METHODS: RpcMethod[] = [
+  defineMethod({
+    name: 'linear.saveIssue',
+    params: LinearSaveIssue,
+    handler: async (params, { runtime }) =>
+      runtime.linearSaveIssue({ ...params, writeId: parseLinearWriteId(params.writeId) })
+  }),
   defineMethod({
     name: 'linear.agentSearchIssues',
     params: AgentSearchIssues,

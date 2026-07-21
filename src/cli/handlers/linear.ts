@@ -64,11 +64,13 @@ import {
   printLinearProjectListWarnings,
   printLinearSearchWarnings
 } from '../linear-format'
+import { runLinearSaveIssue } from './linear-save-issue'
 
 const ISSUE_CONTEXT_TIMEOUT_MS = 120_000
 const LINEAR_WRITE_TIMEOUT_MS = 75_000
 
 export const LINEAR_HANDLERS: Record<string, CommandHandler> = {
+  'linear save-issue': runLinearSaveIssue,
   'linear issue': async ({ flags, client, cwd, json }) => {
     const request = buildIssueRequest(flags, cwd, client.isRemote)
     const response = await client.call<LinearIssueContextResult>('linear.issueContext', request, {

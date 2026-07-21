@@ -309,3 +309,13 @@ export type LinearCreateResult = {
   }
   meta: { workspaceId: string; writeId: string; deduplicated: boolean }
 }
+
+export type LinearSaveIssueResult = {
+  issue: LinearCreateResult['issue']
+  meta: {
+    workspaceId: string
+    created: boolean
+    writeId?: string
+    deduplicated?: boolean
+  }
+}

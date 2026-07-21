@@ -1851,6 +1851,7 @@ export type LinearIssueUpdate = {
   dueDate?: string | null
   labelIds?: string[]
   projectId?: string | null
+  parentId?: string | null
 }
 
 export type ClassifiedError = {

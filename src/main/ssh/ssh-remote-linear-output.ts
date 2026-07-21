@@ -12,7 +12,8 @@ import type {
   LinearStatusSetResult,
   LinearCommentAddResult,
   LinearAttachResult,
-  LinearCreateResult
+  LinearCreateResult,
+  LinearSaveIssueResult
 } from '../../shared/linear-agent-access'
 import {
   formatLinearProjectListRows,
@@ -22,6 +23,7 @@ import {
   isLinearAttachResult,
   isLinearCommentAddResult,
   isLinearCreateResult,
+  isLinearSaveIssueResult,
   isLinearIssueContextResult,
   isLinearIssueListResult,
   isLinearProjectListResult,
@@ -80,6 +82,9 @@ export function formatRemoteLinearCli(result: unknown): { stdout: string; stderr
   if (isLinearAttachResult(result)) {
     return { stdout: `${formatLinearAttach(result)}\n`, stderr: '' }
   }
+  if (isLinearSaveIssueResult(result)) {
+    return { stdout: `${formatLinearSaveIssue(result)}\n`, stderr: '' }
+  }
   if (isLinearCreateResult(result)) {
     return { stdout: `${formatLinearCreate(result)}\n`, stderr: '' }
   }
@@ -118,6 +123,12 @@ function formatLinearIssue(result: LinearIssueContextResult): string {
     lines.push(`Inline media: ${result.inlineMedia.length} (use --json for URLs)`)
   }
   return lines.join('\n')
+}
+
+function formatLinearSaveIssue(result: LinearSaveIssueResult): string {
+  return result.meta.created
+    ? formatLinearCreate(result)
+    : `Saved ${result.issue.identifier}: ${result.issue.title}.`
 }
 
 function formatLinearIssueRows(issues: LinearSearchIssueSummary[]): string {
@@ -208,7 +219,7 @@ function formatLinearAttach(result: LinearAttachResult): string {
   return `Attached ${result.attachment.title} to ${result.issue.identifier}${suffix}.`
 }
 
-function formatLinearCreate(result: LinearCreateResult): string {
+function formatLinearCreate(result: LinearCreateResult | LinearSaveIssueResult): string {
   const parent = result.issue.parent ? ` under ${result.issue.parent.identifier}` : ''
   const project = result.issue.project?.name ? ` in ${result.issue.project.name}` : ''
   const suffix = result.meta.deduplicated ? ' (already created)' : ''

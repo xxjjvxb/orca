@@ -2,6 +2,7 @@ import type {
   LinearAttachResult,
   LinearCommentAddResult,
   LinearCreateResult,
+  LinearSaveIssueResult,
   LinearIssueContextResult,
   LinearIssueListResult,
   LinearIssueTaskUpdateResult,
@@ -133,6 +134,17 @@ export function isLinearCreateResult(result: unknown): result is LinearCreateRes
     typeof result.issue.identifier === 'string' &&
     typeof result.issue.title === 'string' &&
     typeof result.meta.writeId === 'string'
+  )
+}
+
+export function isLinearSaveIssueResult(result: unknown): result is LinearSaveIssueResult {
+  return (
+    isRecord(result) &&
+    isRecord(result.issue) &&
+    isRecord(result.meta) &&
+    typeof result.issue.identifier === 'string' &&
+    typeof result.issue.title === 'string' &&
+    typeof result.meta.created === 'boolean'
   )
 }
 

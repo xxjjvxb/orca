@@ -41,6 +41,7 @@ const LINEAR_HELP = `orca linear
 Usage: orca linear <command> [options]
 
 Commands:
+  save-issue         Create or update a Linear issue
   issue              Read Linear issue context for agents
   search             Search connected Linear workspaces
   team list          List connected Linear teams

@@ -5,6 +5,7 @@ import type {
   LinearIssueListResult,
   LinearIssueContextResult,
   LinearIssueTaskUpdateResult,
+  LinearSaveIssueResult,
   LinearProjectListResult,
   LinearSearchIssueSummary,
   LinearSearchResult,
@@ -130,11 +131,18 @@ export function formatLinearAttach(result: LinearAttachResult): string {
   return `Attached ${result.attachment.title} to ${result.issue.identifier}${suffix}.`
 }
 
-export function formatLinearCreate(result: LinearCreateResult): string {
+export function formatLinearCreate(result: LinearCreateResult | LinearSaveIssueResult): string {
   const parent = result.issue.parent ? ` under ${result.issue.parent.identifier}` : ''
   const project = result.issue.project?.name ? ` in ${result.issue.project.name}` : ''
   const suffix = result.meta.deduplicated ? ' (already created)' : ''
   return `Created ${result.issue.identifier}${parent}${project}: ${result.issue.title}${suffix}.`
+}
+
+export function formatLinearSaveIssue(result: LinearSaveIssueResult): string {
+  if (result.meta.created) {
+    return formatLinearCreate(result)
+  }
+  return `Saved ${result.issue.identifier}: ${result.issue.title}.`
 }
 
 export function formatLinearTaskUpdate(result: LinearIssueTaskUpdateResult): string {

@@ -12,6 +12,9 @@ function matchesRemoteCommand(commandPath: string[], ...command: string[]): bool
 
 export function getRemoteLinearWriteHelp(parsed: ParsedRemoteCli): string | null {
   const path = parsed.commandPath
+  if (matchesRemoteCommand(path, 'linear', 'save-issue')) {
+    return LINEAR_SAVE_ISSUE_HELP
+  }
   if (matchesRemoteCommand(path, 'linear', 'status', 'set')) {
     return LINEAR_STATUS_HELP
   }
@@ -59,6 +62,8 @@ export function getRemoteLinearWriteHelp(parsed: ParsedRemoteCli): string | null
   }
   return null
 }
+
+const LINEAR_SAVE_ISSUE_HELP = `orca linear save-issue\n\nUsage: orca linear save-issue [<id>] [--current] [--team <key|id>] [--title <title>] [--description <text> | --body-file -] [--state <state>] [--assignee me|<user>|null] [--priority none|low|medium|high|urgent] [--estimate <number>|null] [--due-date <yyyy-mm-dd>|null] [--label <label>...] [--project <project>|null] [--parent-id <issue>|null] [--write-id <uuid>] [--workspace <id>] [--json]\n\nCreate or update a Linear issue`
 
 const LINEAR_STATUS_HELP = `orca linear status set\n\nUsage: orca linear status set [<id>] [--current] --to <state> [--workspace <id>] [--json]\n\nSet a Linear issue status`
 const LINEAR_ASSIGNEE_SET_HELP = `orca linear assignee set\n\nUsage: orca linear assignee set [<id>] [--current] (--me | --to-id <userId>) [--workspace <id>] [--json]\n\nSet a Linear issue assignee`

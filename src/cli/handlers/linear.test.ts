@@ -463,6 +463,46 @@ describe('orca linear CLI handlers', () => {
     )
   })
 
+  it('maps MCP-style save-issue updates and explicit clears', async () => {
+    queueFixtures(callMock, okFixture('req_save', createResult()))
+
+    await main(
+      [
+        'linear',
+        'save-issue',
+        'ENG-123',
+        '--title',
+        'Updated title',
+        '--assignee',
+        'null',
+        '--estimate',
+        'null',
+        '--due-date',
+        'null',
+        '--project',
+        'null',
+        '--label',
+        'Bug',
+        '--json'
+      ],
+      '/tmp/repo'
+    )
+
+    expect(callMock).toHaveBeenCalledWith(
+      'linear.saveIssue',
+      expect.objectContaining({
+        input: 'ENG-123',
+        title: 'Updated title',
+        assignee: null,
+        estimate: null,
+        dueDate: null,
+        project: null,
+        labels: ['Bug']
+      }),
+      { timeoutMs: 75_000 }
+    )
+  })
+
   it('rejects duplicate body inputs before dispatch', async () => {
     await main(
       ['linear', 'create', '--title', 'Bug', '--body', 'one', '--body-file', 'body.md'],
