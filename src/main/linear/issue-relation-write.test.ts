@@ -180,4 +180,42 @@ describe('Linear issue relation writes', () => {
 
     expect(rawRequest).toHaveBeenCalledTimes(5)
   })
+
+  it('marks an ambiguous create transport failure as unconfirmed', async () => {
+    rawRequest
+      .mockResolvedValueOnce(connection('relations', []))
+      .mockRejectedValueOnce(new Error('fetch failed: socket hang up'))
+    const { writeIssueRelation } = await import('./issue-relation-write')
+
+    await expect(
+      writeIssueRelation({
+        issue,
+        relatedIssue,
+        relationship: 'blocks',
+        operation: 'add',
+        workspaceId: 'workspace-1'
+      })
+    ).rejects.toMatchObject({ kind: 'unconfirmed' })
+
+    expect(rawRequest).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps safe pre-connect mutation failures retryable as network errors', async () => {
+    rawRequest
+      .mockResolvedValueOnce(connection('relations', []))
+      .mockRejectedValueOnce(new Error('connect ENOTFOUND api.linear.app'))
+    const { writeIssueRelation } = await import('./issue-relation-write')
+
+    await expect(
+      writeIssueRelation({
+        issue,
+        relatedIssue,
+        relationship: 'blocks',
+        operation: 'add',
+        workspaceId: 'workspace-1'
+      })
+    ).rejects.toMatchObject({ kind: 'network' })
+
+    expect(rawRequest).toHaveBeenCalledTimes(2)
+  })
 })

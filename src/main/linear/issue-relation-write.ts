@@ -12,39 +12,12 @@ import {
   type RawRelationNode,
   type RawRelationsResponse
 } from './issue-context-raw'
+import { createLinearIssueRelation, deleteLinearIssueRelation } from './issue-relation-mutation'
 import { LinearWriteFailure } from './issues'
 
 const RELATION_WRITE_READ_CAP = 250
 
-type RelationMutationResponse = {
-  issueRelationCreate?: {
-    success?: boolean
-    issueRelation?: RawRelationNode | null
-  } | null
-  issueRelationDelete?: { success?: boolean } | null
-}
-
 type RelationDirection = 'outbound' | 'inbound'
-
-const CREATE_RELATION_MUTATION = `
-  mutation OrcaLinearCreateIssueRelation($input: IssueRelationCreateInput!) {
-    issueRelationCreate(input: $input) {
-      success
-      issueRelation {
-        id
-        type
-        issue { id identifier title url }
-        relatedIssue { id identifier title url }
-      }
-    }
-  }
-`
-
-const DELETE_RELATION_MUTATION = `
-  mutation OrcaLinearDeleteIssueRelation($id: String!) {
-    issueRelationDelete(id: $id) { success }
-  }
-`
 
 export async function writeIssueRelation(params: {
   issue: LinearIssueRelationWriteResult['issue']
@@ -71,24 +44,11 @@ export async function writeIssueRelation(params: {
       return result(params, absentRelation(params), true)
     }
     if (params.operation === 'remove' && existing) {
-      const raw = await client.client.rawRequest<RelationMutationResponse, Record<string, unknown>>(
-        DELETE_RELATION_MUTATION,
-        { id: existing.id }
-      )
-      if (raw.data?.issueRelationDelete?.success !== true) {
-        throw new LinearWriteFailure('failed', 'Linear relation removal failed')
-      }
+      await deleteLinearIssueRelation(client, existing.id)
       return result(params, existing, false)
     }
-    const raw = await client.client.rawRequest<RelationMutationResponse, Record<string, unknown>>(
-      CREATE_RELATION_MUTATION,
-      { input: relationCreateInput(params) }
-    )
-    const created = raw.data?.issueRelationCreate
-    if (created?.success !== true || !created.issueRelation) {
-      throw new LinearWriteFailure('failed', 'Linear relation creation failed')
-    }
-    return result(params, normalizeRelation(created.issueRelation, params.issue.id), false)
+    const created = await createLinearIssueRelation(client, relationCreateInput(params))
+    return result(params, normalizeRelation(created, params.issue.id), false)
   } catch (error) {
     if (isAuthError(error)) {
       clearToken(entry.workspace.id)
