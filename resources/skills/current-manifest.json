@@ -94,18 +94,18 @@
     {
       "name": "orca-linear",
       "sourcePath": "skills/orca-linear",
-      "releaseRevision": 2,
-      "packageDigest": "d44d09e6ecb6a64da177083aad26a95f031cd1cf26ba059fdc888c2628aef64f",
-      "gitTreeSha": "c34f42030f43e5a85737996fa375bbd79cb5bea8",
+      "releaseRevision": 3,
+      "packageDigest": "8aa4f7fbbf29f6bf92223b1a466e01f7681a3718eca315b2a410b5873fad0877",
+      "gitTreeSha": "a8b3133dbb4e397802ebe66743e825bf20ea20c3",
       "files": [
         {
           "path": "SKILL.md",
-          "size": 10320,
+          "size": 10950,
           "executable": false,
           "classification": "text",
-          "exactSha256": "48ded55ec3842ce65105e6db7adf9bc9ed263ece08555cec056e68e90321c3d5",
-          "textNormalizedSha256": "48ded55ec3842ce65105e6db7adf9bc9ed263ece08555cec056e68e90321c3d5",
-          "identitySha256": "48ded55ec3842ce65105e6db7adf9bc9ed263ece08555cec056e68e90321c3d5"
+          "exactSha256": "0f667695a8d0b81f2d0cbd65c7866757d83c0ca0aab0d4f26b9983921a65e8b3",
+          "textNormalizedSha256": "0f667695a8d0b81f2d0cbd65c7866757d83c0ca0aab0d4f26b9983921a65e8b3",
+          "identitySha256": "0f667695a8d0b81f2d0cbd65c7866757d83c0ca0aab0d4f26b9983921a65e8b3"
         }
       ]
     },
