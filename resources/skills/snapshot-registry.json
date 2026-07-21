@@ -1197,6 +1197,22 @@
             "identitySha256": "48ded55ec3842ce65105e6db7adf9bc9ed263ece08555cec056e68e90321c3d5"
           }
         ]
+      },
+      {
+        "releaseRevision": 3,
+        "packageDigest": "035a703e7f5bf84fe2a63e1e28494b924f98acf44589fab38b32266ff6210723",
+        "gitTreeSha": "b6cd3bdf938f60c0658806f905e3e2e34d40014d",
+        "files": [
+          {
+            "path": "SKILL.md",
+            "size": 10970,
+            "executable": false,
+            "classification": "text",
+            "exactSha256": "f39634cfbfa87070c325763b7c592889e95f80717472d923612c1b7d81854012",
+            "textNormalizedSha256": "f39634cfbfa87070c325763b7c592889e95f80717472d923612c1b7d81854012",
+            "identitySha256": "f39634cfbfa87070c325763b7c592889e95f80717472d923612c1b7d81854012"
+          }
+        ]
       }
     ],
     "orca-emulator-android": [
