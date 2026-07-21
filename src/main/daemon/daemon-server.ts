@@ -24,6 +24,10 @@ import { checkPtySpawnHealth } from './pty-subprocess'
 import { createNoopDaemonFileLog, type DaemonFileLog } from './daemon-file-log'
 import { isTuiAgent } from '../../shared/tui-agent-config'
 import {
+  isAgentSessionExecutionClaim,
+  isAgentSessionSurfaceBinding
+} from '../../shared/agent-session-host-authority'
+import {
   PROTOCOL_VERSION,
   NOTIFY_PREFIX,
   SessionNotFoundError,
@@ -388,6 +392,14 @@ export class DaemonServer {
     switch (request.type) {
       case 'createOrAttach': {
         const p = request.payload
+        let routedSessionId = p.sessionId
+        if (
+          p.agentSessionEnsure !== undefined &&
+          (!isAgentSessionExecutionClaim(p.agentSessionEnsure.claim) ||
+            !isAgentSessionSurfaceBinding(p.agentSessionEnsure.surface))
+        ) {
+          throw new Error('agent_session_identity_required')
+        }
         await this.preparePtySpawnUnlessCanceled(p.sessionId)
         const result = await this.host.createOrAttach({
           sessionId: p.sessionId,
@@ -409,56 +421,61 @@ export class DaemonServer {
           ...(p.shellReadyTimeoutMs !== undefined
             ? { shellReadyTimeoutMs: p.shellReadyTimeoutMs }
             : {}),
+          ...(p.agentSessionEnsure ? { agentSessionEnsure: p.agentSessionEnsure } : {}),
+          onSessionResolved: (sessionId) => {
+            routedSessionId = sessionId
+          },
           streamClient: {
             onData: (data) => {
               // Scan BEFORE enqueue: the batcher may keep-tail drop this
               // chunk, but its facts must be captured regardless.
-              this.transientFactRelay.onSessionData(p.sessionId, data)
-              const lastInputAt = this.lastInputAtBySessionId.get(p.sessionId)
+              this.transientFactRelay.onSessionData(routedSessionId, data)
+              const lastInputAt = this.lastInputAtBySessionId.get(routedSessionId)
               const isInteractiveOutput =
                 data.length <= DaemonServer.INTERACTIVE_OUTPUT_MAX_CHARS &&
                 lastInputAt !== undefined &&
                 performance.now() - lastInputAt <= DaemonServer.INTERACTIVE_OUTPUT_WINDOW_MS
-              this.streamDataBatcher.enqueue(clientId, p.sessionId, data, {
+              this.streamDataBatcher.enqueue(clientId, routedSessionId, data, {
                 flushImmediately: isInteractiveOutput,
                 flushMaxChars: DaemonServer.INTERACTIVE_OUTPUT_MAX_CHARS
               })
             },
-            onExit: (code) => {
+            onExit: (code, incarnationId) => {
               // Why: exit tears down renderer handlers, so it must ride the
               // ordered queue behind final output even when the shallow socket
               // gate holds that output for a later drain pass.
-              this.log.log('session-exited', { sessionId: p.sessionId, code })
-              this.streamDataBatcher.enqueueControlEvent(clientId, p.sessionId, {
+              this.log.log('session-exited', { sessionId: routedSessionId, code })
+              this.streamDataBatcher.enqueueControlEvent(clientId, routedSessionId, {
                 type: 'event',
                 event: 'exit',
-                sessionId: p.sessionId,
-                payload: { code }
+                sessionId: routedSessionId,
+                payload: { code, incarnationId }
               })
               this.streamDataBatcher.flush(clientId)
               recordDaemonStreamBacklogEvent('sessionExit', {
-                sessionIdSuffix: p.sessionId.slice(-10)
+                sessionIdSuffix: routedSessionId.slice(-10)
               })
-              this.transientFactRelay.onSessionExit(p.sessionId)
-              this.streamClientIdBySessionId.delete(p.sessionId)
-              this.lastInputAtBySessionId.delete(p.sessionId)
+              this.transientFactRelay.onSessionExit(routedSessionId)
+              this.streamClientIdBySessionId.delete(routedSessionId)
+              this.lastInputAtBySessionId.delete(routedSessionId)
             }
           }
         })
-        this.streamClientIdBySessionId.set(p.sessionId, clientId)
+        routedSessionId = result.agentSessionEnsure?.owner.ptyId ?? p.sessionId
+        this.streamClientIdBySessionId.set(routedSessionId, clientId)
         // Why an attach-time marker: the adapter resyncs the background set on
         // a fresh connection, which can precede this attach — main's scan
         // suppression must still start at the head of the new stream.
-        if (this.transientFactRelay.isBackgrounded(p.sessionId)) {
-          this.streamDataBatcher.enqueueControlEvent(clientId, p.sessionId, {
+        if (this.transientFactRelay.isBackgrounded(routedSessionId)) {
+          this.streamDataBatcher.enqueueControlEvent(clientId, routedSessionId, {
             type: 'event',
             event: 'sessionBackgroundMarker',
-            sessionId: p.sessionId,
+            sessionId: routedSessionId,
             payload: { background: true }
           })
         }
         this.log.log(result.isNew ? 'session-created' : 'session-attached', {
-          sessionId: p.sessionId,
+          sessionId: routedSessionId,
           pid: result.pid
         })
         return {
@@ -468,7 +485,8 @@ export class DaemonServer {
           shellState: result.shellState,
           ...(result.launchAgent ? { launchAgent: result.launchAgent } : {}),
           wslDistro: result.wslDistro,
-          ...(result.historySeeded !== undefined ? { historySeeded: result.historySeeded } : {})
+          ...(result.historySeeded !== undefined ? { historySeeded: result.historySeeded } : {}),
+          ...(result.agentSessionEnsure ? { agentSessionEnsure: result.agentSessionEnsure } : {})
         }
       }
 

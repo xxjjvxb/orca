@@ -48,6 +48,8 @@ export const TERMINAL_QUERY_REPLY_INPUT_RUNTIME_CAPABILITY =
 // replay ambiguous cutovers when the host advertises idempotent create support.
 export const WORKTREE_CREATE_IDEMPOTENCY_RUNTIME_CAPABILITY =
   'worktree.create-idempotency.v1' as const
+export const AGENT_SESSION_HOST_AUTHORITY_RUNTIME_CAPABILITY =
+  'agent-session.host-authority.v1' as const
 
 export const RUNTIME_CAPABILITIES = [
   'runtime.status.compat.v1',
@@ -65,7 +67,8 @@ export const RUNTIME_CAPABILITIES = [
   LINEAR_ISSUE_ATTRIBUTE_FILTER_RUNTIME_CAPABILITY,
   AI_VAULT_RUNTIME_CAPABILITY,
   TERMINAL_QUERY_REPLY_INPUT_RUNTIME_CAPABILITY,
-  WORKTREE_CREATE_IDEMPOTENCY_RUNTIME_CAPABILITY
+  WORKTREE_CREATE_IDEMPOTENCY_RUNTIME_CAPABILITY,
+  AGENT_SESSION_HOST_AUTHORITY_RUNTIME_CAPABILITY
 ] as const
 
 export type RuntimeCapability = (typeof RUNTIME_CAPABILITIES)[number] | (string & {})

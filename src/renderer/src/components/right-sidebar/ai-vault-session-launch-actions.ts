@@ -115,14 +115,15 @@ export function useAiVaultSessionLaunchActions({
         )
       }
       if (launchResult.tabId === null) {
-        void launchResult.runtimeLaunch.then((created) => {
-          if (!created) {
+        void launchResult.runtimeLaunch.then((outcome) => {
+          if (outcome.status === 'failed') {
             toast.error(
-              translate(
-                'auto.lib.launch.agent.in.new.tab.11cce5cc77',
-                'Could not launch {{value0}} in a new terminal.',
-                { value0: agentLabel(session.agent) }
-              )
+              outcome.message ||
+                translate(
+                  'auto.lib.launch.agent.in.new.tab.11cce5cc77',
+                  'Could not launch {{value0}} in a new terminal.',
+                  { value0: agentLabel(session.agent) }
+                )
             )
             return
           }

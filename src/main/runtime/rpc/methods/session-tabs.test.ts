@@ -115,7 +115,7 @@ describe('session tab RPC methods', () => {
     })
   })
 
-  it('dispatches terminal creation with the requested tab group', async () => {
+  it('dispatches ordinary terminal creation with the requested tab group', async () => {
     const runtime = {
       getRuntimeId: () => 'test-runtime',
       createMobileSessionTerminal: vi.fn().mockResolvedValue({
@@ -142,12 +142,6 @@ describe('session tab RPC methods', () => {
         command: 'zsh',
         cwd: '/repo/packages/app',
         env: { CODEX_PROFILE: 'captured' },
-        launchToken: 'launch-token-123',
-        launchConfig: {
-          agentArgs: '--model gpt-5',
-          agentEnv: { CODEX_PROFILE: 'captured' }
-        },
-        launchAgent: 'codex',
         viewMode: 'chat',
         activate: true
       })
@@ -161,19 +155,12 @@ describe('session tab RPC methods', () => {
       cwd: '/repo/packages/app',
       env: { CODEX_PROFILE: 'captured' },
       startupCommandDelivery: undefined,
-      agent: undefined,
-      launchToken: 'launch-token-123',
-      launchConfig: {
-        agentArgs: '--model gpt-5',
-        agentEnv: { CODEX_PROFILE: 'captured' }
-      },
-      launchAgent: 'codex',
       viewMode: 'chat',
       activate: true
     })
   })
 
-  it('dispatches terminal creation with a requested agent preset', async () => {
+  it('preserves legacy agent creation for mixed-version clients', async () => {
     const runtime = {
       getRuntimeId: () => 'test-runtime',
       createMobileSessionTerminal: vi.fn().mockResolvedValue({
@@ -205,9 +192,12 @@ describe('session tab RPC methods', () => {
       afterTabId: undefined,
       targetGroupId: undefined,
       command: undefined,
+      cwd: undefined,
       startupCommandDelivery: undefined,
       agent: 'codex',
-      activate: undefined
+      activate: undefined,
+      clientMutationId: undefined,
+      signal: undefined
     })
   })
 

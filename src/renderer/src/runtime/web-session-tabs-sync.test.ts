@@ -21,6 +21,10 @@ import {
 import type { BrowserPage, BrowserWorkspace, Tab, TerminalTab } from '../../../shared/types'
 import type { OpenFile } from '../store/slices/editor'
 import {
+  recordWebAgentSessionHandoff,
+  resetWebAgentSessionHandoffsForTests
+} from './web-agent-session-handoff'
+import {
   _getWebSessionTabsTrackingCountsForTest,
   acceptReplayedWebSessionTabsSnapshot,
   applyFreshWebSessionTabsSnapshot,
@@ -104,6 +108,7 @@ describe('applyWebSessionTabsSnapshot', () => {
     resetWebSessionFocusIntentForTests()
     resetWebSessionCloseIntentForTests()
     resetWebSessionReorderIntentForTests()
+    resetWebAgentSessionHandoffsForTests()
   })
 
   it('ignores stale or duplicate same-epoch snapshots after a newer version was applied', () => {
@@ -669,7 +674,7 @@ describe('applyWebSessionTabsSnapshot', () => {
     })
   })
 
-  it('replaces stale local agent quick-launch tabs once host mirrors arrive', () => {
+  it('keeps a provisional Claude tab when the host Claude surface is unrelated', () => {
     const staleLocalAgentTab: TerminalTab = {
       id: 'local-agent-tab',
       ptyId: null,
@@ -729,14 +734,126 @@ describe('applyWebSessionTabsSnapshot', () => {
       NOW
     ) as Partial<WebSessionTabsSyncState>
 
-    const mirroredId = patch.tabsByWorktree?.[WT]?.[0]?.id
-    expect(mirroredId).toBeTruthy()
-    expect(patch.tabsByWorktree?.[WT]).toHaveLength(1)
-    expect(patch.tabsByWorktree?.[WT]?.[0]?.id).not.toBe('local-agent-tab')
+    expect(patch.tabsByWorktree?.[WT]).toHaveLength(2)
+    expect(patch.tabsByWorktree?.[WT]?.some((tab) => tab.id === 'local-agent-tab')).toBe(true)
     expect(patch.unifiedTabsByWorktree?.[WT]?.some((tab) => tab.id === 'local-agent-tab')).toBe(
-      false
+      true
     )
-    expect(patch.groupsByWorktree?.[WT]?.[0]?.tabOrder).toEqual([mirroredId])
+  })
+
+  it('replaces only the provisional tab with an exact structured-create handoff', () => {
+    const provisional = (id: string): TerminalTab => ({
+      id,
+      ptyId: null,
+      worktreeId: WT,
+      title: 'Claude',
+      defaultTitle: 'Claude',
+      customTitle: null,
+      color: null,
+      sortOrder: 0,
+      createdAt: NOW,
+      launchAgent: 'claude'
+    })
+    recordWebAgentSessionHandoff({
+      environmentId: ENV,
+      worktreeId: WT,
+      provisionalTabId: 'provisional-b',
+      hostTabId: 'host-tab-1'
+    })
+
+    const patch = applyWebSessionTabsSnapshot(
+      makeState({
+        tabsByWorktree: {
+          [WT]: [provisional('provisional-a'), provisional('provisional-b')]
+        }
+      }),
+      makeSnapshot([
+        {
+          type: 'terminal',
+          id: HOST_SURFACE_ID,
+          title: 'Claude',
+          parentTabId: 'host-tab-1',
+          leafId: LEAF_ID,
+          isActive: true,
+          launchAgent: 'claude',
+          status: 'ready',
+          terminal: 'terminal-1'
+        }
+      ]),
+      ENV,
+      NOW
+    ) as Partial<WebSessionTabsSyncState>
+
+    expect(patch.tabsByWorktree?.[WT]?.some((tab) => tab.id === 'provisional-a')).toBe(true)
+    expect(patch.tabsByWorktree?.[WT]?.some((tab) => tab.id === 'provisional-b')).toBe(false)
+    expect(patch.tabsByWorktree?.[WT]).toHaveLength(2)
+  })
+
+  it('cleans provisional startup and automatic-resume state during exact handoff', () => {
+    const provisionalTab: TerminalTab = {
+      id: 'provisional-resume',
+      ptyId: null,
+      worktreeId: WT,
+      title: 'Codex',
+      defaultTitle: 'Codex',
+      customTitle: null,
+      color: null,
+      sortOrder: 0,
+      createdAt: NOW,
+      launchAgent: 'codex'
+    }
+    recordWebAgentSessionHandoff({
+      environmentId: ENV,
+      worktreeId: WT,
+      provisionalTabId: provisionalTab.id,
+      hostTabId: 'host-tab-1'
+    })
+
+    const patch = applyWebSessionTabsSnapshot(
+      makeState({
+        tabsByWorktree: { [WT]: [provisionalTab] },
+        pendingStartupByTabId: {
+          [provisionalTab.id]: { command: "codex resume 'session-b'" },
+          retained: { command: 'codex' }
+        },
+        automaticAgentResumeClaimsByTabId: {
+          [provisionalTab.id]: {
+            worktreeId: WT,
+            launchAgent: 'codex',
+            providerSession: { key: 'session_id', id: 'session-b' }
+          },
+          retained: {
+            worktreeId: WT,
+            launchAgent: 'codex',
+            providerSession: { key: 'session_id', id: 'session-a' }
+          }
+        }
+      }),
+      makeSnapshot([
+        {
+          type: 'terminal',
+          id: HOST_SURFACE_ID,
+          title: 'Codex',
+          parentTabId: 'host-tab-1',
+          leafId: LEAF_ID,
+          isActive: true,
+          launchAgent: 'codex',
+          status: 'ready',
+          terminal: 'terminal-1'
+        }
+      ]),
+      ENV,
+      NOW
+    ) as Partial<WebSessionTabsSyncState>
+
+    expect(patch.pendingStartupByTabId).toEqual({ retained: { command: 'codex' } })
+    expect(patch.automaticAgentResumeClaimsByTabId).toEqual({
+      retained: {
+        worktreeId: WT,
+        launchAgent: 'codex',
+        providerSession: { key: 'session_id', id: 'session-a' }
+      }
+    })
   })
 
   it('keeps stale local agent tabs when the host mirror is for a different agent', () => {

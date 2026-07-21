@@ -74,6 +74,8 @@ vi.mock('../ipc/pty', () => ({
   clearProviderPtyState: vi.fn(),
   deletePtyOwnership: vi.fn(),
   setPtyOwnership: vi.fn(),
+  restorePtyIncarnation: vi.fn(),
+  isCurrentPtyExit: vi.fn(() => true),
   answerStartupTerminalColorQueriesForPty: vi.fn((_id: string, data: string) => data)
 }))
 

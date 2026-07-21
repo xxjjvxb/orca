@@ -262,7 +262,8 @@ describe('ai vault resume command runtime', () => {
         agentCommand: "claude '--dangerously-skip-permissions' '--effort' 'max'",
         agentArgs: '--dangerously-skip-permissions --effort max',
         agentEnv: { ANTHROPIC_BASE_URL: 'https://claude.example.test' }
-      }
+      },
+      providerSession: { key: 'session_id', id: 'session-1' }
     })
   })
 
@@ -407,7 +408,10 @@ describe('ai vault resume command runtime', () => {
           resumeCommand: "CODEX_HOME='/root/.codex' codex resume 'session one'"
         }
       })
-    ).toEqual({ command: "CODEX_HOME='/root/.codex' codex resume 'session one'" })
+    ).toEqual({
+      command: "CODEX_HOME='/root/.codex' codex resume 'session one'",
+      providerSession: { key: 'session_id', id: 'session one' }
+    })
   })
 
   it('bypasses the resume pipeline even when the command override is blank', () => {

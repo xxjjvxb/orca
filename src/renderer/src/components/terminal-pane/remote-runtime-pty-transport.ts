@@ -1,6 +1,10 @@
 /* eslint-disable max-lines -- Why: remote PTY transport keeps lifecycle, JSON fallback, and binary stream wiring together so reconnect/destroy ordering stays testable as one behavior surface. */
 import type { RuntimeRpcResponse } from '../../../../shared/runtime-rpc-envelope'
 import type {
+  RuntimeCreateAgentSessionResult,
+  RuntimeEnsureAgentSessionResult
+} from '../../../../shared/agent-session-host-authority'
+import type {
   RuntimeMobileSessionTerminalClientTab,
   RuntimeMobileSessionTabsResult,
   RuntimeTerminalCreate,
@@ -33,17 +37,30 @@ import {
   createRemoteRuntimeViewportBatcher
 } from './remote-runtime-pty-batching'
 import { createBrowserUuid } from '@/lib/browser-uuid'
+import {
+  createAgentSessionCreateOperation,
+  withAgentSessionCreateOperationId
+} from '@/runtime/agent-session-create-operation'
 import { replaceFitOverridePtyId, setFitOverride } from '@/lib/pane-manager/mobile-fit-overrides'
 import { replaceDriverPtyId, setDriverForPty } from '@/lib/pane-manager/mobile-driver-state'
 import { isWebTerminalSurfaceTabId, toHostSessionTabId } from '@/runtime/web-terminal-surface-id'
 import { listRemoteRuntimeSessionTabsDeduped } from '@/runtime/remote-runtime-session-tabs-inflight'
 import { subscribeAcceptedWebSessionTerminalHandle } from '@/runtime/web-session-terminal-handle-events'
+import { runRemoteAgentSessionLaunch } from '@/runtime/remote-agent-session-launch'
+import { useAppStore } from '@/store'
+import { recordWebAgentSessionHandoff } from '@/runtime/web-agent-session-handoff'
+import { refreshWebRuntimeSessionTabsSnapshot } from '@/runtime/web-runtime-session'
 
 const REMOTE_TERMINAL_INPUT_FLUSH_MS = 8
 const REMOTE_TERMINAL_VIEWPORT_FLUSH_MS = 33
 const HOST_SESSION_ATTACH_POLL_MS = 150
 const HOST_SESSION_REPLACEMENT_POLL_MAX_MS = 1_000
 const HOST_SESSION_ATTACH_TIMEOUT_MS = 15_000
+
+type RemoteAgentSessionLaunchResult =
+  | RuntimeEnsureAgentSessionResult
+  | RuntimeCreateAgentSessionResult
+  | { terminal: RuntimeTerminalCreate; disposition?: undefined }
 
 function isRemoteTerminalStaleMessage(message: string): boolean {
   return message.includes('terminal_handle_stale')
@@ -53,7 +70,8 @@ function isRemoteTerminalGoneMessage(message: string): boolean {
   return (
     message.includes('terminal_exited') ||
     message.includes('terminal_gone') ||
-    message.includes('no_connected_pty')
+    message.includes('no_connected_pty') ||
+    message.toLocaleLowerCase('en-US').includes('explicitly killed')
   )
 }
 
@@ -73,6 +91,11 @@ export function createRemoteRuntimePtyTransport(
     launchConfig,
     launchToken,
     launchAgent,
+    resumeProviderSession,
+    agentPrompt,
+    agentPromptDelivery,
+    agentArgsOverride,
+    agentLaunchPreferences,
     worktreeId,
     tabId,
     leafId,
@@ -115,6 +138,9 @@ export function createRemoteRuntimePtyTransport(
   // Why: tab/leaf ids identify the mirrored host pane, so every paired viewer
   // shares them. The instance suffix keeps one viewer's refresh off peer records.
   const clientId = `desktop:${tabId ?? 'tab'}:${leafId ?? 'leaf'}:${createBrowserUuid()}`
+  // Why: reconnect retries must replay one host operation instead of creating
+  // another fresh agent when the first response was lost.
+  const agentCreateOperation = createAgentSessionCreateOperation()
   const outputProcessor = createPtyOutputProcessor({
     onTitleChange,
     onBell,
@@ -123,6 +149,22 @@ export function createRemoteRuntimePtyTransport(
     onAgentExited,
     onAgentStatus
   })
+
+  function hostSnapshotOwnsLaunch(result: RemoteAgentSessionLaunchResult): boolean {
+    if (result.disposition !== undefined) {
+      // Why: every structured launch is host-owned; provisional teardown must
+      // never close its canonical terminal while snapshot reconciliation catches up.
+      return true
+    }
+    const scopedPtyId = toRemoteRuntimePtyId(result.terminal.handle, currentRuntimeEnvironmentId)
+    return (useAppStore.getState().tabsByWorktree[worktreeId ?? ''] ?? []).some(
+      (tab) =>
+        tab.ptyId === scopedPtyId ||
+        (result.terminal.tabId !== undefined &&
+          isWebTerminalSurfaceTabId(tab.id) &&
+          toHostSessionTabId(tab.id) === result.terminal.tabId)
+    )
+  }
 
   function findReadyHostSessionHandle(
     snapshot: RuntimeMobileSessionTabsResult,
@@ -809,29 +851,87 @@ export function createRemoteRuntimePtyTransport(
         const launchConfigToSend = options.launchConfig ?? launchConfig
         const launchTokenToSend = options.launchToken ?? launchToken
         const launchAgentToSend = options.launchAgent ?? launchAgent
-        const created = await callRuntime<{ terminal: RuntimeTerminalCreate }>('terminal.create', {
-          worktree: toRuntimeTerminalWorktreeSelector(worktreeId),
-          ...(commandToSend !== undefined ? { command: commandToSend } : {}),
-          ...(startupCommandDeliveryToSend !== undefined
-            ? { startupCommandDelivery: startupCommandDeliveryToSend }
-            : {}),
-          ...(envToSend !== undefined ? { env: envToSend } : {}),
-          ...(launchConfigToSend !== undefined ? { launchConfig: launchConfigToSend } : {}),
-          ...(launchTokenToSend !== undefined ? { launchToken: launchTokenToSend } : {}),
-          ...(launchAgentToSend !== undefined ? { launchAgent: launchAgentToSend } : {}),
-          tabId,
-          leafId,
-          focus: false,
-          // Why: this transport is backing an already-mounted renderer pane;
-          // activation here is local state, not permission for remote UI reveal.
-          presentation: 'background',
-          ...(activate === true ? { activate: true } : {})
-        })
-        handle = created.terminal.handle
+        const legacyCreate = () =>
+          callRuntime<{ terminal: RuntimeTerminalCreate }>('terminal.create', {
+            worktree: toRuntimeTerminalWorktreeSelector(worktreeId),
+            ...(commandToSend !== undefined ? { command: commandToSend } : {}),
+            ...(startupCommandDeliveryToSend !== undefined
+              ? { startupCommandDelivery: startupCommandDeliveryToSend }
+              : {}),
+            ...(envToSend !== undefined ? { env: envToSend } : {}),
+            ...(launchConfigToSend !== undefined ? { launchConfig: launchConfigToSend } : {}),
+            ...(launchTokenToSend !== undefined ? { launchToken: launchTokenToSend } : {}),
+            ...(launchAgentToSend !== undefined ? { launchAgent: launchAgentToSend } : {}),
+            tabId,
+            leafId,
+            focus: false,
+            // Why: this transport is backing an already-mounted renderer pane;
+            // activation here is local state, not permission for remote UI reveal.
+            presentation: 'background',
+            ...(activate === true ? { activate: true } : {})
+          })
+        const created: RemoteAgentSessionLaunchResult = launchAgentToSend
+          ? await runRemoteAgentSessionLaunch<RemoteAgentSessionLaunchResult>({
+              environmentId: currentRuntimeEnvironmentId,
+              hostAuthority: resumeProviderSession
+                ? () =>
+                    callRuntime<RuntimeEnsureAgentSessionResult>('terminal.ensureAgentSession', {
+                      kind: 'explicit',
+                      worktree: toRuntimeTerminalWorktreeSelector(worktreeId),
+                      agent: launchAgentToSend,
+                      providerSession: resumeProviderSession,
+                      ...(agentArgsOverride !== undefined ? { agentArgs: agentArgsOverride } : {}),
+                      ...(agentLaunchPreferences
+                        ? { launchPreferences: agentLaunchPreferences }
+                        : {}),
+                      placement: { tabId, leafId },
+                      presentation: 'background'
+                    })
+                : () =>
+                    agentCreateOperation.run((clientOperationId) =>
+                      callRuntime<RuntimeCreateAgentSessionResult>(
+                        'terminal.createAgentSession',
+                        withAgentSessionCreateOperationId(
+                          {
+                            worktree: toRuntimeTerminalWorktreeSelector(worktreeId),
+                            agent: launchAgentToSend,
+                            ...(agentPrompt ? { prompt: agentPrompt } : {}),
+                            ...(agentPromptDelivery ? { promptDelivery: agentPromptDelivery } : {}),
+                            ...(agentArgsOverride !== undefined
+                              ? { agentArgs: agentArgsOverride }
+                              : {}),
+                            ...(agentLaunchPreferences
+                              ? { launchPreferences: agentLaunchPreferences }
+                              : {}),
+                            placement: { tabId, leafId },
+                            presentation: 'background'
+                          },
+                          clientOperationId
+                        )
+                      )
+                    ),
+              legacy: legacyCreate
+            })
+          : await legacyCreate()
+        const createdTerminal = created.terminal
+        if (created.disposition !== undefined && tabId && createdTerminal.tabId) {
+          recordWebAgentSessionHandoff({
+            environmentId: currentRuntimeEnvironmentId,
+            worktreeId,
+            provisionalTabId: tabId,
+            hostTabId: createdTerminal.tabId
+          })
+          // Snapshot parity must not delay attachment to a terminal the host already created.
+          void refreshWebRuntimeSessionTabsSnapshot(currentRuntimeEnvironmentId, worktreeId, {
+            acceptCurrentSnapshot: true
+          })
+        }
+        handle = createdTerminal.handle
         if (destroyed) {
-          // Why: this is a cancelled launch, not a connected shared session.
-          // Close the server PTY so rapid tab-open/tab-close does not leak.
-          await closeRemoteTerminal(created.terminal.handle)
+          // Why: snapshot handoff destroys the provisional pane; never close its canonical owner.
+          if (!hostSnapshotOwnsLaunch(created)) {
+            await closeRemoteTerminal(created.terminal.handle)
+          }
           return
         }
 
@@ -853,7 +953,7 @@ export function createRemoteRuntimePtyTransport(
           replay: ''
         } satisfies PtyConnectResult
       } catch (error) {
-        storedCallbacks.onError?.(runtimeTerminalErrorMessage(error))
+        handleRemoteTerminalError(error)
         return undefined
       }
     },

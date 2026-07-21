@@ -18,6 +18,7 @@ import { CLIPBOARD_TEXT_MEASURE_YIELD_CODE_UNITS } from '../../../../shared/clip
 describe('createRemoteRuntimePtyTransport', () => {
   const runtimeCall = vi.fn()
   const runtimeSubscribe = vi.fn()
+  const refreshSessionTabsSnapshot = vi.fn(async () => {})
   const subscriptionSendBinary = vi.fn()
   let subscriptionCallbacks: {
     onResponse: (response: unknown) => void
@@ -125,9 +126,13 @@ describe('createRemoteRuntimePtyTransport', () => {
   beforeEach(() => {
     vi.resetModules()
     vi.doUnmock('../../runtime/remote-runtime-terminal-multiplexer')
+    vi.doMock('@/runtime/web-runtime-session', () => ({
+      refreshWebRuntimeSessionTabsSnapshot: refreshSessionTabsSnapshot
+    }))
     vi.clearAllMocks()
     subscriptionCallbacks = null
     subscriptionSendBinary.mockReset()
+    refreshSessionTabsSnapshot.mockClear()
     runtimeCall.mockResolvedValue({ ok: true, result: { terminal: { handle: 'terminal-1' } } })
     runtimeSubscribe.mockImplementation(
       async (_args: unknown, callbacks: typeof subscriptionCallbacks) => {
@@ -1081,6 +1086,109 @@ describe('createRemoteRuntimePtyTransport', () => {
     })
   })
 
+  it('does not close a live owner adopted after provisional pane handoff', async () => {
+    let resolveEnsure: (value: unknown) => void = () => {}
+    runtimeCall.mockImplementation((args) => {
+      if (args.method === 'status.get') {
+        return Promise.resolve({
+          ok: true,
+          result: {
+            runtimeProtocolVersion: 3,
+            minCompatibleRuntimeClientVersion: 2,
+            capabilities: ['agent-session.host-authority.v1']
+          }
+        })
+      }
+      if (args.method === 'terminal.ensureAgentSession') {
+        return new Promise((resolve) => {
+          resolveEnsure = resolve
+        })
+      }
+      return Promise.resolve({ ok: true, result: {} })
+    })
+    const { createRemoteRuntimePtyTransport } = await import('./remote-runtime-pty-transport')
+    const transport = createRemoteRuntimePtyTransport('env-1', {
+      worktreeId: 'wt-1',
+      tabId: 'tab-1',
+      leafId: 'pane:1',
+      launchAgent: 'codex',
+      resumeProviderSession: { key: 'session_id', id: 'live-session' }
+    })
+
+    const connect = transport.connect({ url: '', callbacks: {} })
+    await vi.waitFor(() =>
+      expect(runtimeCall).toHaveBeenCalledWith(
+        expect.objectContaining({ method: 'terminal.ensureAgentSession' })
+      )
+    )
+    transport.destroy?.()
+    resolveEnsure({
+      ok: true,
+      result: {
+        disposition: 'adopted',
+        terminal: { handle: 'terminal-live', worktreeId: 'wt-1', title: null }
+      }
+    })
+    await connect
+
+    expect(runtimeCall).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'terminal.close' })
+    )
+  })
+
+  it('does not close a structured create after provisional pane handoff', async () => {
+    let resolveCreate: (value: unknown) => void = () => {}
+    runtimeCall.mockImplementation((args) => {
+      if (args.method === 'status.get') {
+        return Promise.resolve({
+          ok: true,
+          result: {
+            runtimeProtocolVersion: 3,
+            minCompatibleRuntimeClientVersion: 2,
+            capabilities: ['agent-session.host-authority.v1']
+          }
+        })
+      }
+      if (args.method === 'terminal.createAgentSession') {
+        return new Promise((resolve) => {
+          resolveCreate = resolve
+        })
+      }
+      return Promise.resolve({ ok: true, result: {} })
+    })
+    const { createRemoteRuntimePtyTransport } = await import('./remote-runtime-pty-transport')
+    const transport = createRemoteRuntimePtyTransport('env-1', {
+      worktreeId: 'wt-1',
+      tabId: 'provisional-tab',
+      leafId: 'provisional-leaf',
+      launchAgent: 'codex'
+    })
+
+    const connect = transport.connect({ url: '', callbacks: {} })
+    await vi.waitFor(() =>
+      expect(runtimeCall).toHaveBeenCalledWith(
+        expect.objectContaining({ method: 'terminal.createAgentSession' })
+      )
+    )
+    transport.destroy?.()
+    resolveCreate({
+      ok: true,
+      result: {
+        disposition: 'created',
+        terminal: {
+          handle: 'terminal-live',
+          tabId: 'canonical-host-tab',
+          leafId: 'canonical-host-leaf'
+        }
+      }
+    })
+    await connect
+
+    expect(runtimeCall).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'terminal.close' })
+    )
+  })
+
   it('passes activation intent when creating the remote runtime terminal', async () => {
     const { createRemoteRuntimePtyTransport } = await import('./remote-runtime-pty-transport')
     const transport = createRemoteRuntimePtyTransport('env-1', {
@@ -1156,7 +1264,120 @@ describe('createRemoteRuntimePtyTransport', () => {
     )
   })
 
-  it('prefers connect-time launch metadata when creating the remote runtime terminal', async () => {
+  it('uses connect-time agent identity while the remote host builds the launch', async () => {
+    runtimeCall.mockImplementation(async (args: { method?: string }) =>
+      args.method === 'status.get'
+        ? {
+            ok: true,
+            result: {
+              runtimeProtocolVersion: 3,
+              minCompatibleRuntimeClientVersion: 2,
+              capabilities: ['agent-session.host-authority.v1']
+            }
+          }
+        : { ok: true, result: { terminal: { handle: 'terminal-1' } } }
+    )
+    const { createRemoteRuntimePtyTransport } = await import('./remote-runtime-pty-transport')
+    const transport = createRemoteRuntimePtyTransport('env-1', {
+      worktreeId: 'wt-1',
+      tabId: 'tab-1',
+      leafId: 'pane:1',
+      command: "codex 'old'",
+      launchConfig: { agentArgs: '--old', agentEnv: {} },
+      agentArgsOverride: '--profile captured',
+      launchToken: 'old-token',
+      launchAgent: 'codex'
+    })
+
+    await transport.connect({
+      url: '',
+      command: "codex '--model' 'gpt-5' 'resume' 'session-1'",
+      env: { CODEX_PROFILE: 'captured', ORCA_AGENT_LAUNCH_TOKEN: 'fresh-token' },
+      launchConfig: {
+        agentArgs: '--model gpt-5',
+        agentEnv: { CODEX_PROFILE: 'captured' }
+      },
+      launchToken: 'fresh-token',
+      launchAgent: 'codex',
+      callbacks: {}
+    })
+
+    expect(runtimeCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        selector: 'env-1',
+        method: 'terminal.createAgentSession',
+        params: expect.objectContaining({
+          clientOperationId: expect.stringMatching(/^\d{13}-[0-9a-f]{32}$/),
+          worktree: 'id:wt-1',
+          agent: 'codex',
+          agentArgs: '--profile captured',
+          placement: { tabId: 'tab-1', leafId: 'pane:1' },
+          presentation: 'background'
+        })
+      })
+    )
+  })
+
+  it('records the exact provisional handoff and refreshes a snapshot that arrived early', async () => {
+    runtimeCall.mockImplementation(async (args: { method?: string }) =>
+      args.method === 'status.get'
+        ? {
+            ok: true,
+            result: {
+              runtimeProtocolVersion: 3,
+              minCompatibleRuntimeClientVersion: 2,
+              capabilities: ['agent-session.host-authority.v1']
+            }
+          }
+        : {
+            ok: true,
+            result: {
+              disposition: 'created',
+              terminal: {
+                handle: 'terminal-1',
+                tabId: 'canonical-host-tab',
+                leafId: 'canonical-host-leaf'
+              }
+            }
+          }
+    )
+    const { createRemoteRuntimePtyTransport } = await import('./remote-runtime-pty-transport')
+    const { resolveWebAgentSessionHandoff } =
+      await import('../../runtime/web-agent-session-handoff')
+    const transport = createRemoteRuntimePtyTransport('env-1', {
+      worktreeId: 'wt-1',
+      tabId: 'provisional-tab',
+      leafId: 'provisional-leaf',
+      launchAgent: 'codex'
+    })
+
+    await transport.connect({ url: '', callbacks: {} })
+
+    expect(
+      resolveWebAgentSessionHandoff({
+        environmentId: 'env-1',
+        worktreeId: 'wt-1',
+        provisionalTabId: 'provisional-tab'
+      })
+    ).toBe('canonical-host-tab')
+    expect(refreshSessionTabsSnapshot).toHaveBeenCalledWith('env-1', 'wt-1', {
+      acceptCurrentSnapshot: true
+    })
+  })
+
+  it('preserves the connect-time legacy payload when host authority is unavailable', async () => {
+    runtimeCall.mockImplementation(async (args: { method?: string }) =>
+      args.method === 'status.get'
+        ? {
+            ok: true,
+            result: {
+              runtimeProtocolVersion: 3,
+              minCompatibleRuntimeClientVersion: 2,
+              capabilities: []
+            }
+          }
+        : { ok: true, result: { terminal: { handle: 'terminal-legacy' } } }
+    )
     const { createRemoteRuntimePtyTransport } = await import('./remote-runtime-pty-transport')
     const transport = createRemoteRuntimePtyTransport('env-1', {
       worktreeId: 'wt-1',
@@ -1181,21 +1402,28 @@ describe('createRemoteRuntimePtyTransport', () => {
       callbacks: {}
     })
 
-    expect(runtimeCall).toHaveBeenCalledWith(
-      expect.objectContaining({
-        selector: 'env-1',
-        method: 'terminal.create',
-        params: expect.objectContaining({
-          command: "codex '--model' 'gpt-5' 'resume' 'session-1'",
-          env: { CODEX_PROFILE: 'captured', ORCA_AGENT_LAUNCH_TOKEN: 'fresh-token' },
-          launchConfig: {
-            agentArgs: '--model gpt-5',
-            agentEnv: { CODEX_PROFILE: 'captured' }
-          },
-          launchToken: 'fresh-token',
-          launchAgent: 'codex'
-        })
-      })
+    expect(runtimeCall).toHaveBeenCalledWith({
+      selector: 'env-1',
+      method: 'terminal.create',
+      params: {
+        worktree: 'id:wt-1',
+        command: "codex '--model' 'gpt-5' 'resume' 'session-1'",
+        env: { CODEX_PROFILE: 'captured', ORCA_AGENT_LAUNCH_TOKEN: 'fresh-token' },
+        launchConfig: {
+          agentArgs: '--model gpt-5',
+          agentEnv: { CODEX_PROFILE: 'captured' }
+        },
+        launchToken: 'fresh-token',
+        launchAgent: 'codex',
+        tabId: 'tab-1',
+        leafId: 'pane:1',
+        focus: false,
+        presentation: 'background'
+      },
+      timeoutMs: 15_000
+    })
+    expect(runtimeCall).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'terminal.createAgentSession' })
     )
   })
 

@@ -383,6 +383,8 @@ const MOBILE_RPC_METHOD_ALLOWLIST = new Set([
   'terminal.close',
   'terminal.closeTab',
   'terminal.create',
+  'terminal.createAgentSession',
+  'terminal.ensureAgentSession',
   'terminal.focus',
   'terminal.agentStatus',
   'terminal.getAutoRestoreFit',
@@ -1176,7 +1178,9 @@ export class OrcaRuntimeRpcServer {
     try {
       await this.dispatcher.dispatchStreaming(request, replyForRequest, {
         connectionId,
-        clientId: token,
+        // Why: idempotency and floor ownership must survive token rotation;
+        // the registered device id is the stable authenticated principal.
+        clientId: device.deviceId,
         // Why: gates the mobile-only payload diet (native-chat char clipping) so
         // full-screen web/desktop runtime clients aren't truncated.
         clientKind: device.scope,

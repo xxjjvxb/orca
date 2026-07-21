@@ -79,6 +79,11 @@ import {
 } from '../shared/task-source-context'
 import type { MigrationUnsupportedPtyEntry } from '../shared/agent-status-types'
 import { MOBILE_PAIRING_USERDATA_FILES } from './runtime/mobile-pairing-files'
+import { sanitizeWorkspaceSessionTerminalRetirements } from './runtime/mobile-session-terminal-persistence-retirement'
+import {
+  removeRepoFromHostWorkspaceSessions,
+  removeRepoFromWorkspaceSession
+} from './orca-profiles/profile-project-session-state'
 import { hardenExistingSecureFile } from '../shared/secure-file'
 import {
   LEGACY_DEFAULT_SSH_RELAY_GRACE_PERIOD_SECONDS,
@@ -2445,7 +2450,8 @@ function cloneWorkspaceSessionState(session: WorkspaceSessionState): WorkspaceSe
 
 function removeWorkspaceSessionOwner(
   session: WorkspaceSessionState | undefined,
-  ownerKey: string
+  ownerKey: string,
+  options: { advanceTerminalTopologyRevision?: boolean } = {}
 ): WorkspaceSessionState | undefined {
   if (!session) {
     return session
@@ -2459,6 +2465,30 @@ function removeWorkspaceSessionOwner(
     delete next.terminalLayoutsByTabId[tab.id]
     if (next.activeTabId === tab.id) {
       next.activeTabId = null
+    }
+  }
+  if (next.terminalPtyIncarnationsByPaneKey) {
+    const removedTabIds = new Set(removedTerminalTabs.map((tab) => tab.id))
+    next.terminalPtyIncarnationsByPaneKey = Object.fromEntries(
+      Object.entries(next.terminalPtyIncarnationsByPaneKey).filter(([paneKey]) => {
+        const separator = paneKey.lastIndexOf(':')
+        return separator < 1 || !removedTabIds.has(paneKey.slice(0, separator))
+      })
+    )
+  }
+  if (next.terminalSurfaceTombstonesByPaneKey) {
+    next.terminalSurfaceTombstonesByPaneKey = Object.fromEntries(
+      Object.entries(next.terminalSurfaceTombstonesByPaneKey).filter(
+        ([, tombstone]) => tombstone.worktreeId !== ownerKey
+      )
+    )
+  }
+  const repoId = getRepoIdFromWorktreeId(ownerKey)
+  const previousTopologyRevision = next.terminalTopologyRevisionByRepoId?.[repoId] ?? 0
+  if (options.advanceTerminalTopologyRevision) {
+    next.terminalTopologyRevisionByRepoId = {
+      ...next.terminalTopologyRevisionByRepoId,
+      [repoId]: previousTopologyRevision + 1
     }
   }
 
@@ -4346,6 +4376,11 @@ export class Store {
     // can never be referenced again — drop them with the parent.
     delete this.state.sparsePresetsByRepo[id]
     this.pruneWorktreeStateForRepo(id, null)
+    this.state.workspaceSession = removeRepoFromWorkspaceSession(this.state.workspaceSession, id)
+    this.state.workspaceSessionsByHostId = removeRepoFromHostWorkspaceSessions(
+      this.state.workspaceSessionsByHostId,
+      id
+    )
     this.scheduleSave()
   }
 
@@ -4367,6 +4402,21 @@ export class Store {
     // Why: if the id survives on another host, prune only this host's worktree
     // metas; otherwise prune everything for the id (matches removeProject).
     this.pruneWorktreeStateForRepo(id, idStillPresent ? hostId : null)
+    if (!idStillPresent) {
+      this.state.workspaceSession = removeRepoFromWorkspaceSession(this.state.workspaceSession, id)
+      this.state.workspaceSessionsByHostId = removeRepoFromHostWorkspaceSessions(
+        this.state.workspaceSessionsByHostId,
+        id
+      )
+    } else if (parseExecutionHostId(hostId)?.kind === 'runtime') {
+      const session = this.state.workspaceSessionsByHostId?.[hostId]
+      if (session) {
+        this.state.workspaceSessionsByHostId = {
+          ...this.state.workspaceSessionsByHostId,
+          [hostId]: removeRepoFromWorkspaceSession(session, id)
+        }
+      }
+    }
     this.scheduleSave()
   }
 
@@ -5004,6 +5054,11 @@ export class Store {
     delete this.state.worktreeMeta[worktreeId]
     delete this.state.worktreeLineageById[worktreeId]
     delete this.state.workspaceLineageByChildKey[worktreeWorkspaceKey(worktreeId)]
+    this.state.workspaceSession = removeWorkspaceSessionOwner(
+      this.state.workspaceSession,
+      worktreeId,
+      { advanceTerminalTopologyRevision: true }
+    )!
     this.scheduleSave()
   }
 
@@ -5149,6 +5204,21 @@ export class Store {
         }
         if (sleepingChanged) {
           session.sleepingAgentSessionsByPaneKey = nextSleeping
+          sessionChanged = true
+        }
+      }
+      if (session.terminalSurfaceTombstonesByPaneKey) {
+        let tombstonesChanged = false
+        const nextTombstones = { ...session.terminalSurfaceTombstonesByPaneKey }
+        for (const [paneKey, tombstone] of Object.entries(nextTombstones)) {
+          if (tombstone.worktreeId !== oldWorktreeId) {
+            continue
+          }
+          nextTombstones[paneKey] = { ...tombstone, worktreeId: newWorktreeId }
+          tombstonesChanged = true
+        }
+        if (tombstonesChanged) {
+          session.terminalSurfaceTombstonesByPaneKey = nextTombstones
           sessionChanged = true
         }
       }
@@ -5738,10 +5808,13 @@ export class Store {
     this.setHostWorkspaceSession(resolved, session)
   }
 
-  /** Persist a non-'local' host partition. The PTY-binding race protections in
-   *  setLocalWorkspaceSession only apply to the local daemon, so remote hosts
-   *  take the lighter prune-and-store path. */
+  /** Persist a non-'local' host partition. */
   private setHostWorkspaceSession(hostId: ExecutionHostId, session: WorkspaceSessionState): void {
+    // Why: each partition owns its topology fence; renderer writes omit it and must rebase locally.
+    session = sanitizeWorkspaceSessionTerminalRetirements(
+      session,
+      this.state.workspaceSessionsByHostId?.[hostId]
+    )
     const pruned = pruneWorkspaceSessionBrowserHistory(
       pruneLocalTerminalScrollbackBuffers(session, this.state.repos)
     )
@@ -5753,6 +5826,8 @@ export class Store {
   }
 
   private setLocalWorkspaceSession(session: PersistedState['workspaceSession']): void {
+    const prior = this.state.workspaceSession
+    session = sanitizeWorkspaceSessionTerminalRetirements(session, prior)
     session = pruneWorkspaceSessionBrowserHistory(
       pruneLocalTerminalScrollbackBuffers(session, this.state.repos)
     )
@@ -5764,7 +5839,6 @@ export class Store {
     // snapshot lands AFTER persistPtyBinding's sync flush, it would overwrite
     // the durable binding and re-open the orphan window. Merge in any
     // existing bindings whenever the incoming snapshot's binding is empty.
-    const prior = this.state.workspaceSession
     const normalized = normalizeWorkspaceSessionPaneIdentities(
       session,
       prior?.terminalLayoutsByTabId
@@ -6058,6 +6132,7 @@ export class Store {
     tabId: string
     leafId: string
     ptyId: string
+    incarnationId?: string
     startupCwd?: string
   }): void {
     const session = this.state.workspaceSession
@@ -6065,11 +6140,38 @@ export class Store {
       return
     }
     const sessionBeforeBinding = cloneWorkspaceSessionState(session)
+    const paneKey = `${args.tabId}:${args.leafId}`
+    let terminalMembershipChanged = false
+    const advanceTopologyAfterMembershipChange = (): void => {
+      const repoId = getRepoIdFromWorktreeId(args.worktreeId)
+      const currentRevision = session.terminalTopologyRevisionByRepoId?.[repoId] ?? 0
+      if (!terminalMembershipChanged || currentRevision <= 0) {
+        return
+      }
+      // Why: a real host-admitted spawn after a retirement must be distinguishable from a stale renderer replay.
+      session.terminalTopologyRevisionByRepoId = {
+        ...session.terminalTopologyRevisionByRepoId,
+        [repoId]: currentRevision + 1
+      }
+    }
+    if (args.incarnationId) {
+      session.terminalPtyIncarnationsByPaneKey = {
+        ...session.terminalPtyIncarnationsByPaneKey,
+        [paneKey]: args.incarnationId
+      }
+      if (session.terminalSurfaceTombstonesByPaneKey?.[paneKey]) {
+        session.terminalSurfaceTombstonesByPaneKey = {
+          ...session.terminalSurfaceTombstonesByPaneKey
+        }
+        delete session.terminalSurfaceTombstonesByPaneKey[paneKey]
+      }
+    }
     const tabs = session.tabsByWorktree?.[args.worktreeId]
     const tab = tabs?.find((t) => t.id === args.tabId)
     if (tab) {
       tab.ptyId = args.ptyId
     } else {
+      terminalMembershipChanged = true
       // Why: pty:spawn can beat the debounced session writer for a newly
       // created tab. Persist a minimal tab so hydration does not prune the
       // crash-safe layout binding below as an orphaned tab id.
@@ -6094,6 +6196,7 @@ export class Store {
     if (!isTerminalLeafId(args.leafId)) {
       // Why: legacy renderer-local pane ids may arrive from older callers; keep
       // them out of durable leaf-keyed layout state after the UUID migration.
+      advanceTopologyAfterMembershipChange()
       try {
         this.flushOrThrow()
       } catch (err) {
@@ -6105,12 +6208,14 @@ export class Store {
     const layout = session.terminalLayoutsByTabId?.[args.tabId]
     if (layout) {
       if (!layout.root) {
+        terminalMembershipChanged = true
         // Why: createTab can persist an empty layout before TerminalPane mounts.
         // The sync spawn binding must still leave a durable UUID root behind.
         layout.root = { type: 'leaf', leafId: args.leafId }
         layout.activeLeafId = args.leafId
         layout.expandedLeafId = null
       } else if (!layoutContainsLeafId(layout.root, args.leafId)) {
+        terminalMembershipChanged = true
         // Why: splitPane publishes the new pane and starts pty:spawn before the
         // debounced full layout snapshot reaches main. Add a minimal leaf so a
         // crash in that window cannot make the new pane's binding unreachable.
@@ -6130,6 +6235,7 @@ export class Store {
         [args.leafId]: args.ptyId
       }
     } else {
+      terminalMembershipChanged = true
       // Why: first-spawn-ever for a new tab — the renderer's debounced writer
       // creates the layout entry on PaneManager init, but the binding has to
       // be on disk before pty:spawn returns or a SIGKILL inside the same
@@ -6146,6 +6252,7 @@ export class Store {
         }
       }
     }
+    advanceTopologyAfterMembershipChange()
     try {
       this.flushOrThrow()
     } catch (err) {

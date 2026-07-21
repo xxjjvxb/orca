@@ -25,6 +25,12 @@ import type { TerminalOscLinkRange } from '../../shared/terminal-osc-link-ranges
 import type { TerminalGitHubPRLink } from '../../shared/terminal-github-pr-link-detector'
 import type { GitProviderStatusOptions } from './git-provider-status-options'
 import type { PtySpawnResult } from './pty-spawn-result'
+import type { PtyIncarnationId } from '../../shared/pty-incarnation'
+import type {
+  AgentSessionExecutionClaim,
+  AgentSessionOwnerBinding,
+  AgentSessionSurfaceBinding
+} from '../../shared/agent-session-host-authority'
 
 // ─── PTY Provider ───────────────────────────────────────────────────
 
@@ -98,24 +104,44 @@ export type PtySpawnOptions = {
    *  through spawn options keeps local PTY and daemon PTY semantics aligned
    *  without promoting pwsh into a separate shell family. */
   terminalWindowsPowerShellImplementation?: 'auto' | 'powershell.exe' | 'pwsh.exe'
+  agentSessionEnsure?: {
+    claim: AgentSessionExecutionClaim
+    surface: AgentSessionSurfaceBinding
+  }
+  /** Host-scoped structured-create identity used only for lower-owner replay. */
+  agentSessionCreateOperationId?: string
+  /** Signals that the native process exists even if later publication fails. */
+  onPtySpawnCommitted?: () => void
+  /** Cancels only before physical dispatch; operation identity fences later ambiguity. */
+  signal?: AbortSignal
 }
 
 export type { PtySpawnResult }
 
 export type PtyProcessInfo = {
   id: string
+  incarnationId?: PtyIncarnationId
   cwd: string
   title: string
   /** Owning worktree when the provider can report it authoritatively. */
   worktreeId?: string
   /** Trusted ORCA_TERMINAL_HANDLE exported into this PTY, when known. */
   terminalHandle?: string
+  agentSessionOwners?: AgentSessionOwnerBinding[]
 }
 
 export type IPtyProvider = {
   spawn(opts: PtySpawnOptions): Promise<PtySpawnResult>
   /** Whether this spawn target can append the Git guard after its final env merge. */
   supportsGitCredentialGuardHost?: (sessionId?: string) => boolean
+  /** Explicit false selects pre-claim legacy spawn for a preserved old daemon. */
+  supportsAgentSessionClaims?: (options?: { signal?: AbortSignal }) => boolean | Promise<boolean>
+  /** Whether missing claim metadata in this PTY's process listing proves absence. */
+  providesAgentSessionOwnerListings?: (ptyId: string) => boolean
+  /** Whether fresh structured creates can replay one spawn across a lost relay response. */
+  supportsAgentSessionCreateOperations?: (options?: {
+    signal?: AbortSignal
+  }) => boolean | Promise<boolean>
   attach(id: string): Promise<void>
   hasPty?: (id: string) => boolean
   write(id: string, data: string): void
@@ -184,7 +210,9 @@ export type IPtyProvider = {
     callback: (payload: { id: string; data: string; sequenceChars?: number }) => void
   ): () => void
   onReplay(callback: (payload: { id: string; data: string }) => void): () => void
-  onExit(callback: (payload: { id: string; code: number }) => void): () => void
+  onExit(
+    callback: (payload: { id: string; code: number; incarnationId?: PtyIncarnationId }) => void
+  ): () => void
 }
 
 // ─── Filesystem Provider ────────────────────────────────────────────

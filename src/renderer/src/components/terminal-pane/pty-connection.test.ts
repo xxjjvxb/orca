@@ -14838,7 +14838,14 @@ describe('connectPanePty', () => {
 
     const pane = createPane(2)
     const manager = createManager(2)
-    const deps = createDeps()
+    const deps = createDeps({
+      startup: {
+        command: "codex '--profile' 'recipe'",
+        launchAgent: 'codex',
+        launchConfig: { agentArgs: '--profile recipe', agentEnv: {} },
+        agentArgsOverride: '--profile recipe'
+      }
+    })
 
     connectPanePty(pane as never, manager as never, deps as never)
 
@@ -14847,6 +14854,7 @@ describe('connectPanePty', () => {
       expect.any(Object)
     )
     expect(createdTransportOptions[0]?.cwdFallback).toBeUndefined()
+    expect(createdTransportOptions[0]?.agentArgsOverride).toBe('--profile recipe')
     expect(transport.connect).toHaveBeenCalled()
   })
 

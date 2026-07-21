@@ -1,6 +1,12 @@
 import type { StartupCommandDelivery } from '../../shared/codex-startup-delivery'
 import type { TuiAgent } from '../../shared/types'
 import type { ShellReadyState, TerminalSnapshot } from './types'
+import type {
+  AgentSessionClaimedSpawnResult,
+  AgentSessionExecutionClaim,
+  AgentSessionSurfaceBinding
+} from '../../shared/agent-session-host-authority'
+import type { PtyIncarnationId } from '../../shared/pty-incarnation'
 
 export type CreateOrAttachOptions = {
   sessionId: string
@@ -19,7 +25,17 @@ export type CreateOrAttachOptions = {
   shellReadySupported?: boolean
   shellReadyTimeoutMs?: number
   historySeed?: string
-  streamClient: { onData: (data: string) => void; onExit: (code: number) => void }
+  agentSessionEnsure?: {
+    claim: AgentSessionExecutionClaim
+    surface: AgentSessionSurfaceBinding
+  }
+  streamClient: {
+    onData: (data: string) => void
+    onExit: (code: number, incarnationId: PtyIncarnationId) => void
+  }
+  /** Lets the daemon route output under the adopted owner's canonical id before
+   *  attaching its stream callbacks. */
+  onSessionResolved?: (sessionId: string) => void
 }
 
 export type CreateOrAttachResult = {
@@ -31,4 +47,6 @@ export type CreateOrAttachResult = {
   launchAgent?: TuiAgent
   wslDistro: string | null
   attachToken: symbol
+  incarnationId: PtyIncarnationId
+  agentSessionEnsure?: AgentSessionClaimedSpawnResult
 }

@@ -88,6 +88,10 @@ import {
 import { advertisedUrlWatcher } from '../ports/advertised-url-watcher'
 import { makePaneKey } from '../../shared/stable-pane-id'
 import { SETUP_AGENT_SEQUENCE_STARTUP_COMMAND_ENV } from '../../shared/setup-agent-sequencing'
+import type {
+  AgentSessionExecutionClaim,
+  AgentSessionSurfaceBinding
+} from '../../shared/agent-session-host-authority'
 import { FOLDER_WORKSPACE_INSTANCE_SEPARATOR } from '../../shared/worktree-id'
 import { RpcDispatcher } from './rpc/dispatcher'
 import type { RpcRequest } from './rpc/core'
@@ -10172,6 +10176,153 @@ describe('OrcaRuntimeService', () => {
     })
   })
 
+  it('does not register or publish a PTY incarnation that exited before spawn resolved', async () => {
+    const runtime = new OrcaRuntimeService(store)
+    const tabId = '11111111-1111-4111-8111-111111111111'
+    const leafId = '22222222-2222-4222-8222-222222222222'
+    runtime.setPtyController({
+      spawn: vi.fn(async () => {
+        runtime.beginPtyRegistration('pty-exited-during-start', 'incarnation-exited-during-start')
+        runtime.onPtyExit('pty-exited-during-start', 0, 'incarnation-exited-during-start')
+        return {
+          id: 'pty-exited-during-start',
+          incarnationId: 'incarnation-exited-during-start'
+        }
+      }),
+      write: () => true,
+      kill: () => true,
+      getForegroundProcess: async () => null
+    })
+
+    await expect(
+      runtime.createTerminal(`path:${TEST_WORKTREE_PATH}`, {
+        command: 'codex',
+        presentation: 'background',
+        tabId,
+        leafId,
+        persistHostSessionBinding: true
+      })
+    ).rejects.toThrow('agent_session_exited_during_start')
+    await expect(runtime.listTerminals(`id:${TEST_WORKTREE_ID}`)).resolves.toMatchObject({
+      terminals: []
+    })
+    await expect(runtime.listMobileSessionTabs(`id:${TEST_WORKTREE_ID}`)).resolves.toMatchObject({
+      tabs: []
+    })
+    const internals = runtime as unknown as {
+      handleByPtyId: Map<string, string>
+      ptysById: Map<string, unknown>
+    }
+    expect(internals.handleByPtyId.has('pty-exited-during-start')).toBe(false)
+    expect(internals.ptysById.has('pty-exited-during-start')).toBe(false)
+  })
+
+  it('adopts the execution owner canonical surface for repeated structured resumes', async () => {
+    let canonicalOwner:
+      | {
+          claim: AgentSessionExecutionClaim
+          generation: string
+          phase: 'live'
+          ptyId: string
+          surface: AgentSessionSurfaceBinding
+        }
+      | undefined
+    const spawn = vi.fn(async (options) => {
+      const ensure = options.agentSessionEnsure
+      expect(ensure).toBeDefined()
+      canonicalOwner ??= {
+        claim: ensure!.claim,
+        generation: 'generation-1',
+        phase: 'live',
+        ptyId: 'pty-claimed',
+        surface: ensure!.surface
+      }
+      return {
+        id: 'pty-claimed',
+        agentSessionEnsure: {
+          disposition: spawn.mock.calls.length === 1 ? ('created' as const) : ('adopted' as const),
+          owner: canonicalOwner
+        }
+      }
+    })
+    const runtime = new OrcaRuntimeService(store)
+    runtime.setPtyController({
+      spawn,
+      write: () => true,
+      kill: () => true,
+      getForegroundProcess: async () => null
+    })
+
+    const request = {
+      kind: 'explicit' as const,
+      worktree: `id:${TEST_WORKTREE_ID}`,
+      agent: 'codex' as const,
+      providerSession: { key: 'session_id' as const, id: 'provider-session-1' }
+    }
+    const first = await runtime.ensureAgentSession(request)
+    const second = await runtime.ensureAgentSession(request)
+
+    expect(first.disposition).toBe('created')
+    expect(second.disposition).toBe('adopted')
+    expect(second.terminal).toMatchObject({
+      handle: first.terminal.handle,
+      tabId: first.terminal.tabId,
+      paneKey: first.terminal.paneKey
+    })
+    expect(spawn).toHaveBeenCalledTimes(2)
+    expect(spawn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: expect.stringContaining("'resume' 'provider-session-1'"),
+        agentSessionEnsure: expect.objectContaining({
+          claim: expect.objectContaining({ agent: 'codex' })
+        })
+      })
+    )
+  })
+
+  it('builds structured fresh drafts with supported launch preferences on the host', async () => {
+    const spawn = vi.fn().mockResolvedValue({ id: 'pty-agent-draft' })
+    const runtime = new OrcaRuntimeService({
+      ...store,
+      getSettings: () => ({
+        ...store.getSettings(),
+        disabledTuiAgents: [],
+        agentCmdOverrides: { claude: 'host-claude' },
+        agentDefaultArgs: { claude: '--host-default' },
+        agentDefaultEnv: { claude: { HOST_PROFILE: 'true' } }
+      })
+    })
+    runtime.setPtyController({
+      spawn,
+      write: () => true,
+      kill: () => true,
+      getForegroundProcess: async () => null
+    })
+
+    await runtime.createAgentSession(
+      {
+        clientOperationId: `${Date.now()}-${'ab'.repeat(16)}`,
+        worktree: `id:${TEST_WORKTREE_ID}`,
+        agent: 'claude',
+        prompt: 'review before sending',
+        promptDelivery: 'draft',
+        agentArgs: '--permission-mode plan',
+        launchPreferences: { model: 'opus', effort: 'high' }
+      },
+      { clientId: 'renderer-1', clientKind: 'runtime' }
+    )
+
+    expect(spawn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: expect.stringMatching(
+          /^host-claude '--model' 'opus'.*'--permission-mode' 'plan'.*--prefill 'review before sending'/
+        ),
+        env: expect.objectContaining({ HOST_PROFILE: 'true' })
+      })
+    )
+    expect(spawn.mock.calls[0]?.[0]?.command).not.toContain('--host-default')
+  })
+
   it('applies Settings agent defaults to bare agent command terminal creates', async () => {
     const spawn = vi.fn().mockResolvedValue({ id: 'pty-bg' })
     const runtimeStore = {
@@ -17545,7 +17696,7 @@ describe('OrcaRuntimeService', () => {
     )
   })
 
-  it('does not publish exited saved PTY bindings as ready terminal streams', async () => {
+  it('retires exited saved PTY bindings instead of publishing a pending ghost', async () => {
     const runtime = new OrcaRuntimeService(store)
     runtime.attachWindow(1)
     runtime.syncWindowGraph(1, {
@@ -17579,14 +17730,12 @@ describe('OrcaRuntimeService', () => {
 
     const result = await runtime.listMobileSessionTabs(`id:${TEST_WORKTREE_ID}`)
 
-    expect(result.tabs).toEqual([
-      expect.objectContaining({
-        type: 'terminal',
-        id: 'tab-1::pane:1',
-        status: 'pending-handle',
-        terminal: null
-      })
-    ])
+    expect(result).toMatchObject({
+      activeGroupId: null,
+      activeTabId: null,
+      activeTabType: null,
+      tabs: []
+    })
   })
 
   it('resolves mobile terminal surfaces by exact split leaf', async () => {
@@ -19345,7 +19494,7 @@ describe('OrcaRuntimeService', () => {
     expect(suppressed?.type === 'terminal' && suppressed.agentStatus?.terminalTitle).toBeUndefined()
   })
 
-  it('pushes PTY-backed mobile session readiness changes when a server PTY exits', async () => {
+  it('pushes PTY-backed mobile session retirement when a server PTY exits', async () => {
     const spawn = vi.fn().mockResolvedValue({ id: 'laptop-created-pty' })
     const runtime = new OrcaRuntimeService(store)
     runtime.setPtyController({
@@ -19367,14 +19516,10 @@ describe('OrcaRuntimeService', () => {
 
     expect(events).toEqual([
       expect.objectContaining({
-        tabs: [
-          expect.objectContaining({
-            type: 'terminal',
-            parentTabId: 'laptop-tab',
-            status: 'pending-handle',
-            terminal: null
-          })
-        ]
+        activeGroupId: null,
+        activeTabId: null,
+        activeTabType: null,
+        tabs: []
       })
     ])
     await expect(runtime.readTerminal(laptopTerminal.handle)).resolves.toMatchObject({

@@ -1,5 +1,12 @@
 import type { ParsedAgentStatusPayload } from '../../../../shared/agent-status-types'
-import type { SleepingAgentLaunchConfig } from '../../../../shared/agent-session-resume'
+import type {
+  AgentProviderSessionMetadata,
+  SleepingAgentLaunchConfig
+} from '../../../../shared/agent-session-resume'
+import type {
+  AgentLaunchPreferences,
+  AgentPromptDelivery
+} from '../../../../shared/agent-session-host-authority'
 import type { StartupCommandDelivery } from '../../../../shared/codex-startup-delivery'
 import type { ProjectExecutionRuntimeResolution } from '../../../../shared/project-execution-runtime'
 import type { EventProps } from '../../../../shared/telemetry-events'
@@ -142,6 +149,11 @@ export type IpcPtyTransportOptions = {
   env?: Record<string, string>
   command?: string
   launchConfig?: SleepingAgentLaunchConfig
+  resumeProviderSession?: AgentProviderSessionMetadata
+  agentPrompt?: string
+  agentPromptDelivery?: AgentPromptDelivery
+  agentArgsOverride?: string | null
+  agentLaunchPreferences?: AgentLaunchPreferences
   launchToken?: string
   launchAgent?: TuiAgent
   startupCommandDelivery?: StartupCommandDelivery

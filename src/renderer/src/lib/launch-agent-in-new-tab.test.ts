@@ -29,6 +29,10 @@ const store = {
     terminalWindowsShell?: string
     experimentalNativeChat?: boolean
     openAgentTabsInChatByDefault?: boolean
+    nativeChatSessionOptions?: Record<
+      string,
+      { model?: string; valuesByModel?: Record<string, Record<string, string | boolean>> }
+    >
   },
   projects: [
     {
@@ -116,7 +120,7 @@ describe('launchAgentInNewTab', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockIsWebRuntimeSessionActive.mockReturnValue(false)
-    mockCreateWebRuntimeSessionTerminal.mockResolvedValue(true)
+    mockCreateWebRuntimeSessionTerminal.mockResolvedValue({ status: 'created' })
     store.activeRepoId = 'repo-1'
     store.activeWorktreeId = 'wt-1'
     store.settings = {
@@ -300,6 +304,7 @@ describe('launchAgentInNewTab', () => {
       environmentId: 'web-runtime',
       targetGroupId: 'group-1',
       activate: true,
+      agentSessionKind: 'fresh',
       agent: 'claude',
       viewMode: 'terminal'
     })
@@ -340,19 +345,59 @@ describe('launchAgentInNewTab', () => {
       environmentId: 'web-runtime',
       targetGroupId: 'group-1',
       activate: true,
+      agentSessionKind: 'fresh',
+      launchAgent: 'codex',
       command: "codex '--model' 'gpt-5' '--reasoning-effort' 'high' 'fix the spinner'",
       env: { CODEX_PROFILE: 'captured' },
-      startupCommandDelivery: 'shell-ready',
       launchConfig: {
         agentCommand: "codex '--model' 'gpt-5' '--reasoning-effort' 'high'",
         agentArgs: '--model gpt-5 --reasoning-effort high',
         agentEnv: { CODEX_PROFILE: 'captured' }
       },
-      launchAgent: 'codex',
+      startupCommandDelivery: 'shell-ready',
+      prompt: 'fix the spinner',
+      promptDelivery: 'auto-submit',
       viewMode: 'terminal'
     })
     expect(mockCreateTab).not.toHaveBeenCalled()
     expect(mockQueueTabStartupCommand).not.toHaveBeenCalled()
+  })
+
+  it('preserves paired-host draft delivery and supported launch preferences', async () => {
+    mockIsWebRuntimeSessionActive.mockReturnValue(true)
+    store.settings = {
+      agentCmdOverrides: {},
+      agentDefaultArgs: {},
+      agentDefaultEnv: {},
+      activeRuntimeEnvironmentId: 'web-runtime',
+      nativeChatSessionOptions: {
+        claude: {
+          model: 'opus',
+          valuesByModel: { opus: { effort: 'high', fastMode: true } }
+        }
+      }
+    }
+    const { launchAgentInNewTab } = await import('./launch-agent-in-new-tab')
+
+    const result = launchAgentInNewTab({
+      agent: 'claude',
+      worktreeId: 'wt-1',
+      prompt: 'review before sending',
+      promptDelivery: 'draft',
+      agentArgs: '--permission-mode plan'
+    })
+
+    expect(result).toEqual(expect.objectContaining({ tabId: null, pasteDraftAfterLaunch: false }))
+    expect(mockCreateWebRuntimeSessionTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        launchAgent: 'claude',
+        prompt: 'review before sending',
+        promptDelivery: 'draft',
+        agentArgs: '--permission-mode plan',
+        launchPreferences: { model: 'opus', effort: 'high' }
+      })
+    )
+    expect(mockCreateTab).not.toHaveBeenCalled()
   })
 
   it('propagates the default chat mode to paired web runtime launches', async () => {
@@ -373,6 +418,7 @@ describe('launchAgentInNewTab', () => {
       expect.objectContaining({
         worktreeId: 'wt-1',
         environmentId: 'web-runtime',
+        agentSessionKind: 'fresh',
         agent: 'codex',
         viewMode: 'chat'
       })
@@ -397,6 +443,7 @@ describe('launchAgentInNewTab', () => {
       expect.objectContaining({
         worktreeId: 'wt-1',
         environmentId: 'web-runtime',
+        agentSessionKind: 'fresh',
         agent: 'codex',
         viewMode: 'terminal'
       })
@@ -405,7 +452,10 @@ describe('launchAgentInNewTab', () => {
 
   it('surfaces a toast when host agent launch fails in paired web clients', async () => {
     mockIsWebRuntimeSessionActive.mockReturnValue(true)
-    mockCreateWebRuntimeSessionTerminal.mockResolvedValue(false)
+    mockCreateWebRuntimeSessionTerminal.mockResolvedValue({
+      status: 'failed',
+      message: 'Upgrade the remote Orca host before starting or resuming agent sessions.'
+    })
     store.settings = {
       agentCmdOverrides: {},
       agentDefaultArgs: {},
@@ -420,7 +470,9 @@ describe('launchAgentInNewTab', () => {
     })
 
     await Promise.resolve()
-    expect(mockToastError).toHaveBeenCalledWith('Could not launch claude in a new terminal.')
+    expect(mockToastError).toHaveBeenCalledWith(
+      'Upgrade the remote Orca host before starting or resuming agent sessions.'
+    )
     expect(mockSetActiveTabType).not.toHaveBeenCalled()
   })
 
@@ -541,7 +593,8 @@ describe('launchAgentInNewTab', () => {
     expect(mockQueueTabStartupCommand).toHaveBeenCalledWith(
       'tab-1',
       expect.objectContaining({
-        command: 'codex "--model" "gpt-5" "fix the spinner"'
+        command: 'codex "--model" "gpt-5" "fix the spinner"',
+        agentArgsOverride: '--model gpt-5'
       })
     )
   })

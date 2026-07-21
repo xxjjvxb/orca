@@ -1,11 +1,16 @@
 import { toast } from 'sonner'
 import { useAppStore } from '@/store'
-import type { AgentStartupPlan } from '@/lib/tui-agent-startup'
 import {
   createWebRuntimeSessionTerminal,
   isWebTerminalSurfaceTabId
 } from '@/runtime/web-runtime-session'
 import type { Tab, TuiAgent } from '../../../shared/types'
+import type {
+  AgentLaunchPreferences,
+  AgentPromptDelivery
+} from '../../../shared/agent-session-host-authority'
+import type { SleepingAgentLaunchConfig } from '../../../shared/agent-session-resume'
+import type { StartupCommandDelivery } from '../../../shared/codex-startup-delivery'
 import { translate } from '@/i18n/i18n'
 
 function removeStaleLocalAgentTabsForWebHostLaunch(worktreeId: string): void {
@@ -33,7 +38,14 @@ export function launchAgentInWebHostTab(args: {
   environmentId: string | null
   groupId?: string
   hasPrompt: boolean
-  startupPlan: AgentStartupPlan
+  prompt?: string
+  promptDelivery?: AgentPromptDelivery
+  agentArgs?: string | null
+  launchPreferences?: AgentLaunchPreferences
+  command: string
+  env?: Record<string, string>
+  launchConfig: SleepingAgentLaunchConfig
+  startupCommandDelivery?: StartupCommandDelivery
   viewMode?: Tab['viewMode']
   onPromptDelivered?: () => void
 }): void {
@@ -43,7 +55,14 @@ export function launchAgentInWebHostTab(args: {
     environmentId,
     groupId,
     hasPrompt,
-    startupPlan,
+    prompt,
+    promptDelivery,
+    agentArgs,
+    launchPreferences,
+    command,
+    env,
+    launchConfig,
+    startupCommandDelivery,
     viewMode,
     onPromptDelivered
   } = args
@@ -54,28 +73,32 @@ export function launchAgentInWebHostTab(args: {
     targetGroupId: groupId,
     activate: true,
     ...(viewMode ? { viewMode } : {}),
+    agentSessionKind: 'fresh',
     ...(hasPrompt
       ? {
-          command: startupPlan.launchCommand,
-          ...(startupPlan.env ? { env: startupPlan.env } : {}),
-          launchConfig: startupPlan.launchConfig,
           launchAgent: agent,
-          ...(startupPlan.startupCommandDelivery
-            ? { startupCommandDelivery: startupPlan.startupCommandDelivery }
-            : {})
+          command,
+          ...(env ? { env } : {}),
+          launchConfig,
+          ...(startupCommandDelivery ? { startupCommandDelivery } : {})
         }
-      : { agent })
-  }).then((created) => {
+      : { agent }),
+    ...(hasPrompt && prompt ? { prompt } : {}),
+    ...(promptDelivery ? { promptDelivery } : {}),
+    ...(agentArgs !== undefined ? { agentArgs } : {}),
+    ...(launchPreferences ? { launchPreferences } : {})
+  }).then((outcome) => {
     // Why: created means the host accepted the launch, not that a local tab
     // exists; keep pruning stale local rows until the snapshot mirrors.
     removeStaleLocalAgentTabsForWebHostLaunch(worktreeId)
-    if (!created) {
+    if (outcome.status === 'failed') {
       toast.error(
-        translate(
-          'auto.lib.launch.agent.in.new.tab.11cce5cc77',
-          'Could not launch {{value0}} in a new terminal.',
-          { value0: agent }
-        )
+        outcome.message ||
+          translate(
+            'auto.lib.launch.agent.in.new.tab.11cce5cc77',
+            'Could not launch {{value0}} in a new terminal.',
+            { value0: agent }
+          )
       )
       return
     }

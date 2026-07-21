@@ -12,15 +12,16 @@ export type {
 // ─── Protocol Version ────────────────────────────────────────────────
 import type { StartupCommandDelivery } from '../../shared/codex-startup-delivery'
 import type { TuiAgent } from '../../shared/types'
+import type {
+  AgentSessionExecutionClaim,
+  AgentSessionOwnerBinding,
+  AgentSessionSurfaceBinding
+} from '../../shared/agent-session-host-authority'
 // Why: daemons can survive app updates. Bump for IPC wire-shape changes, or
 // when daemon-baked behavior cannot be delivered by on-disk wrapper refresh.
 // Why: bump when adding daemon wire behavior so same-version old daemons do
 // not silently accept the handshake and then reject new RPCs.
-export const PROTOCOL_VERSION = 23
-export const GIT_CREDENTIAL_GUARD_HOST_PROTOCOL_VERSION = 22
-export const PREVIOUS_DAEMON_PROTOCOL_VERSIONS = [
-  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22
-] as const
+export * from './daemon-protocol-version'
 
 // ─── Session State Machine ──────────────────────────────────────────
 export type SessionState = 'created' | 'spawning' | 'running' | 'exiting' | 'exited'
@@ -126,6 +127,10 @@ export type CreateOrAttachRequest = {
     shellReadyTimeoutMs?: number
     /** Recovered ANSI applied before the new subprocess can emit startup output. */
     historySeed?: string
+    agentSessionEnsure?: {
+      claim: AgentSessionExecutionClaim
+      surface: AgentSessionSurfaceBinding
+    }
   }
 }
 
@@ -376,6 +381,7 @@ export type SystemResolverHealthResult = {
 
 export type SessionInfo = {
   sessionId: string
+  incarnationId?: string
   state: SessionState
   shellState: ShellReadyState
   isAlive: boolean
@@ -385,6 +391,7 @@ export type SessionInfo = {
   cols: number
   rows: number
   createdAt: number
+  agentSessionOwners?: AgentSessionOwnerBinding[]
 }
 
 // Why: SessionInfo + source protocol version, so the Manage Sessions UI can

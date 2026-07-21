@@ -1,47 +1,45 @@
 import type { SshChannelMultiplexer } from '../ssh/ssh-channel-multiplexer'
 import type { IPtyProvider, PtyProcessInfo, PtySpawnOptions, PtySpawnResult } from './types'
 import { toAppSshPtyId, toRelaySshPtyId } from './ssh-pty-id'
-import { seedPowerlevel10kWizardEnv } from '../pty/powerlevel10k-wizard-env'
+import type {
+  RemoteCliBridgeEnv,
+  SshPtyDataCallback,
+  SshPtyExitCallback,
+  SshPtyReplayCallback
+} from './ssh-pty-provider-contract'
+import {
+  proveSshAgentSessionClaimCapability,
+  validateClaimedSshSpawn
+} from './ssh-agent-session-claim-validation'
+import {
+  assertSshAgentSessionCreateResult,
+  requestSshAgentSessionCreate,
+  sshSupportsAgentSessionCreateOperations
+} from './ssh-agent-session-create-operation'
+import { isPtyIncarnationId } from '../../shared/pty-incarnation'
+import { mapSshPtyProcessList } from './ssh-agent-session-process-list'
+import {
+  parseSshPtyAttachResult,
+  reattachSshPtySessionWithExitFence,
+  type SshPtyAttachResult
+} from './ssh-pty-session-reattach'
+import { waitForSshCapabilityProbe } from './ssh-capability-probe-waiter'
+import { buildSshPtySpawnRequest } from './ssh-pty-spawn-request'
+import { SshPtySpawnExitRaceTracker } from './ssh-pty-spawn-exit-race'
 
-type DataCallback = (payload: { id: string; data: string }) => void
-type ReplayCallback = (payload: { id: string; data: string }) => void
-type ExitCallback = (payload: { id: string; code: number }) => void
-type RemoteCliBridgeEnv = {
-  binDir: string
-  relayDir: string
-  nodePath: string
-  sockPath: string
-  pathDelimiter?: ':' | ';'
-}
-
-export const SSH_SESSION_EXPIRED_ERROR = 'SSH_SESSION_EXPIRED'
-export const SSH_PTY_IDENTITY_MISMATCH_ERROR = 'SSH_PTY_IDENTITY_MISMATCH'
-
-export function isSshPtyNotFoundError(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err)
-  return /PTY ".+" not found/i.test(message)
-}
-
-export function isSshPtyIdentityMismatchError(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err)
-  return message.includes(SSH_PTY_IDENTITY_MISMATCH_ERROR) || /identity mismatch/i.test(message)
-}
-
-/**
- * Remote PTY provider that proxies all operations through the relay
- * via the JSON-RPC multiplexer. Implements the same IPtyProvider interface
- * as LocalPtyProvider so the dispatch layer can route transparently.
- */
+/** Remote PTY provider that proxies IPtyProvider operations through the relay. */
 export class SshPtyProvider implements IPtyProvider {
   private mux: SshChannelMultiplexer
   private connectionId: string
-  private dataListeners = new Set<DataCallback>()
-  private replayListeners = new Set<ReplayCallback>()
-  private exitListeners = new Set<ExitCallback>()
-  // Why: store the unsubscribe handle so dispose() can detach from the
-  // multiplexer. Without this, notification callbacks keep firing after
-  // the provider is torn down on disconnect, routing events to stale state.
+  private dataListeners = new Set<SshPtyDataCallback>()
+  private replayListeners = new Set<SshPtyReplayCallback>()
+  private exitListeners = new Set<SshPtyExitCallback>()
+  // Why: stale notification callbacks must not outlive a disconnected provider.
   private unsubscribeNotifications: (() => void) | null = null
+  private agentSessionClaimCapability: Promise<void> | null = null
+  private agentSessionClaimCapabilitySupported = false
+  private agentSessionCreateOperationCapability: Promise<boolean> | null = null
+  private spawnExitRaces = new SshPtySpawnExitRaceTracker()
 
   constructor(
     connectionId: string,
@@ -51,7 +49,6 @@ export class SshPtyProvider implements IPtyProvider {
     this.connectionId = connectionId
     this.mux = mux
 
-    // Subscribe to relay notifications for PTY events
     this.unsubscribeNotifications = mux.onNotification((method, params) => {
       switch (method) {
         case 'pty.data':
@@ -67,8 +64,15 @@ export class SshPtyProvider implements IPtyProvider {
           break
 
         case 'pty.exit':
+          this.spawnExitRaces.recordExit(params.id as string, params.incarnationId)
           for (const cb of this.exitListeners) {
-            cb({ id: this.toAppPtyId(params.id as string), code: params.code as number })
+            cb({
+              id: this.toAppPtyId(params.id as string),
+              code: params.code as number,
+              ...(isPtyIncarnationId(params.incarnationId)
+                ? { incarnationId: params.incarnationId }
+                : {})
+            })
           }
           break
       }
@@ -85,9 +89,7 @@ export class SshPtyProvider implements IPtyProvider {
     this.exitListeners.clear()
   }
 
-  getConnectionId(): string {
-    return this.connectionId
-  }
+  getConnectionId = (): string => this.connectionId
 
   private toRelayPtyId(id: string): string {
     return toRelaySshPtyId(this.connectionId, id)
@@ -98,112 +100,137 @@ export class SshPtyProvider implements IPtyProvider {
   }
 
   async spawn(opts: PtySpawnOptions): Promise<PtySpawnResult> {
-    // Why: when sessionId is present, the caller is requesting reattach to an
-    // existing relay PTY (persisted across app restart). pty.attach replays
-    // the buffered output the relay kept alive during the grace window.
-    if (opts.sessionId) {
-      const relaySessionId = this.toRelayPtyId(opts.sessionId)
-      console.warn(
-        `[ssh-pty] spawn() called with sessionId=${opts.sessionId}, attempting pty.attach`
-      )
-      try {
-        // Why: pass the pane's expected identity so the relay can reject a
-        // cross-generation id collision (see pty-handler attach) instead of
-        // replaying the wrong shell into this pane. ORCA_PANE_KEY is the
-        // renderer's per-pane identity; ORCA_TAB_ID is the coarser fallback.
-        const expectedPaneKey = opts.paneKey ?? opts.env?.ORCA_PANE_KEY
-        const expectedTabId = opts.tabId ?? opts.env?.ORCA_TAB_ID
-        const attachResult = (await this.mux.request('pty.attach', {
-          id: relaySessionId,
-          cols: opts.cols,
-          rows: opts.rows,
-          suppressReplayNotification: true,
-          ...(expectedPaneKey ? { expectedPaneKey } : {}),
-          ...(expectedTabId ? { expectedTabId } : {})
-        })) as { replay?: string }
-        console.warn(
-          `[ssh-pty] pty.attach succeeded for ${opts.sessionId}, replay=${!!attachResult.replay}`
-        )
-        return {
-          id: this.toAppPtyId(relaySessionId),
-          isReattach: true,
-          ...(attachResult.replay ? { replay: attachResult.replay } : {})
-        }
-      } catch (err) {
-        // Why: pty.attach fails when the relay grace window has elapsed.
-        // Surface the exact condition so the renderer can clear the stale
-        // binding before replacing the dead relay PTY in the same pane.
-        console.warn(`[ssh-pty] pty.attach FAILED for ${opts.sessionId}:`, err)
-        if (isSshPtyNotFoundError(err)) {
-          const mismatchMarker = isSshPtyIdentityMismatchError(err)
-            ? ` ${SSH_PTY_IDENTITY_MISMATCH_ERROR}`
-            : ''
-          throw new Error(`${SSH_SESSION_EXPIRED_ERROR}: ${relaySessionId}${mismatchMarker}`)
-        }
-        throw err
+    if (opts.agentSessionEnsure && opts.sessionId) {
+      throw new Error('agent_session_claim_unavailable')
+    }
+    if (opts.agentSessionEnsure) {
+      const supportsClaims = await this.supportsAgentSessionClaims({ signal: opts.signal })
+      if (opts.signal?.aborted) {
+        throw new Error('client_disconnected')
+      }
+      if (!supportsClaims) {
+        throw new Error('agent_session_claim_unavailable')
       }
     }
+    if (opts.sessionId) {
+      return await reattachSshPtySessionWithExitFence({
+        mux: this.mux,
+        connectionId: this.connectionId,
+        sessionId: opts.sessionId,
+        options: opts,
+        exitRaceTracker: this.spawnExitRaces
+      })
+    }
 
-    const result = await this.mux.request('pty.spawn', {
-      cols: opts.cols,
-      rows: opts.rows,
-      cwd: opts.cwd,
-      env: this.withRemoteCliBridgeEnv(opts.env, opts.envToDelete),
-      ...(opts.envToDelete?.length ? { envToDelete: opts.envToDelete } : {}),
-      // Why: the relay's plugin-overlay env augmenter needs to know which
-      // Pi-compatible agent is being launched, while commandDelivery tells it
-      // whether to submit the command itself for runtime-owned background PTYs.
-      ...(opts.command ? { command: opts.command } : {}),
-      ...(opts.launchAgent ? { launchAgent: opts.launchAgent } : {}),
-      ...(opts.shellOverride !== undefined ? { shellOverride: opts.shellOverride } : {}),
-      ...(opts.terminalWindowsWslDistro !== undefined
-        ? { terminalWindowsWslDistro: opts.terminalWindowsWslDistro }
-        : {}),
-      ...(opts.commandDelivery ? { commandDelivery: opts.commandDelivery } : {}),
-      ...(opts.startupCommandDelivery
-        ? { startupCommandDelivery: opts.startupCommandDelivery }
-        : {}),
-      // Why: main may strip ORCA_PANE_KEY/ORCA_TAB_ID from the shell env when
-      // remote hooks are disabled, but the relay still needs attach identity
-      // metadata to reject cross-generation PTY id collisions.
-      ...(opts.paneKey ? { paneKey: opts.paneKey } : {}),
-      ...(opts.tabId ? { tabId: opts.tabId } : {})
-    })
-    return {
-      ...(result as PtySpawnResult),
-      id: this.toAppPtyId((result as PtySpawnResult).id),
-      ...(opts.sessionId ? { sessionExpired: true } : {})
+    const supportsCreateOperation = opts.agentSessionCreateOperationId
+      ? await this.supportsAgentSessionCreateOperations({ signal: opts.signal })
+      : false
+    if (opts.signal?.aborted) {
+      throw new Error('client_disconnected')
+    }
+    if (opts.agentSessionCreateOperationId && !supportsCreateOperation) {
+      // Why: host routing owns legacy selection; a changed relay must not downgrade after dispatch.
+      throw new Error('execution_owner_unavailable')
+    }
+    const operation = this.spawnExitRaces.begin()
+    try {
+      const result = await requestSshAgentSessionCreate({
+        mux: this.mux,
+        operationId: opts.agentSessionCreateOperationId,
+        signal: opts.signal,
+        params: buildSshPtySpawnRequest({
+          options: opts,
+          remoteCliBridgeEnv: this.remoteCliBridgeEnv,
+          supportsCreateOperation
+        })
+      })
+      if (opts.agentSessionCreateOperationId) {
+        assertSshAgentSessionCreateResult(result)
+      }
+      const spawnResult = result as PtySpawnResult
+      if (this.spawnExitRaces.didMatchingExitArrive(operation, spawnResult)) {
+        // Why: relay notification can share the response batch; no controller registration may follow.
+        throw Object.assign(new Error('agent_session_exited_during_start'), {
+          agentSessionOperationOutcome: 'unknown' as const
+        })
+      }
+      const claimed = spawnResult.agentSessionEnsure
+      if (opts.agentSessionEnsure) {
+        const validation = validateClaimedSshSpawn(spawnResult, opts.agentSessionEnsure)
+        if (!validation.valid) {
+          if (validation.cleanup === 'created' && typeof spawnResult.id === 'string') {
+            try {
+              // Why: immediate relay shutdown resolves only after physical exit;
+              // a best-effort graceful request cannot prove the duplicate is gone.
+              await this.mux.request('pty.shutdown', { id: spawnResult.id, immediate: true })
+            } catch {
+              throw new Error('execution_owner_unavailable')
+            }
+          }
+          throw new Error(validation.error)
+        }
+      }
+      return {
+        ...spawnResult,
+        id: this.toAppPtyId(spawnResult.id),
+        ...(claimed
+          ? {
+              agentSessionEnsure: {
+                ...claimed,
+                owner: {
+                  ...claimed.owner,
+                  ptyId: this.toAppPtyId(claimed.owner.ptyId)
+                }
+              }
+            }
+          : {}),
+        ...(opts.sessionId ? { sessionExpired: true } : {})
+      }
+    } finally {
+      this.spawnExitRaces.finish(operation)
     }
   }
 
-  private withRemoteCliBridgeEnv(
-    env: Record<string, string> | undefined,
-    envToDelete?: readonly string[]
-  ): Record<string, string> {
-    const merged = { ...env }
-    if (this.remoteCliBridgeEnv) {
-      const pathDelimiter = this.remoteCliBridgeEnv.pathDelimiter ?? ':'
-      const pathKey = merged.PATH !== undefined ? 'PATH' : merged.Path !== undefined ? 'Path' : null
-      if (pathKey) {
-        const pathValue = merged[pathKey] ?? ''
-        merged[pathKey] = pathValue.split(pathDelimiter).includes(this.remoteCliBridgeEnv.binDir)
-          ? pathValue
-          : pathValue
-            ? `${this.remoteCliBridgeEnv.binDir}${pathDelimiter}${pathValue}`
-            : this.remoteCliBridgeEnv.binDir
+  async supportsAgentSessionClaims(options: { signal?: AbortSignal } = {}): Promise<boolean> {
+    const probe = this.agentSessionClaimCapability ?? proveSshAgentSessionClaimCapability(this.mux)
+    this.agentSessionClaimCapability = probe
+    try {
+      await waitForSshCapabilityProbe(probe, options.signal)
+      this.agentSessionClaimCapabilitySupported = true
+      return true
+    } catch {
+      if (!options.signal?.aborted && this.agentSessionClaimCapability === probe) {
+        // Why: negative physical probes must follow a relay upgraded on this connection.
+        this.agentSessionClaimCapability = null
+        this.agentSessionClaimCapabilitySupported = false
       }
-      merged.ORCA_REMOTE_CLI_BIN_DIR = this.remoteCliBridgeEnv.binDir
-      merged.ORCA_RELAY_DIR = this.remoteCliBridgeEnv.relayDir
-      merged.ORCA_RELAY_NODE_PATH = this.remoteCliBridgeEnv.nodePath
-      merged.ORCA_RELAY_SOCKET_PATH = this.remoteCliBridgeEnv.sockPath
+      return false
     }
-    // Why: match local/daemon precedence—managed defaults and augmentations
-    // cannot resurrect values the caller explicitly removed.
-    for (const key of envToDelete ?? []) {
-      delete merged[key]
+  }
+
+  providesAgentSessionOwnerListings(_ptyId: string): boolean {
+    return this.agentSessionClaimCapabilitySupported
+  }
+
+  async supportsAgentSessionCreateOperations(
+    options: { signal?: AbortSignal } = {}
+  ): Promise<boolean> {
+    const probe =
+      this.agentSessionCreateOperationCapability ??
+      sshSupportsAgentSessionCreateOperations(this.mux)
+    this.agentSessionCreateOperationCapability = probe
+    let supported: boolean
+    try {
+      supported = await waitForSshCapabilityProbe(probe, options.signal)
+    } catch {
+      // Why: one canceled waiter must not cancel or evict the shared physical probe used by peers.
+      return false
     }
-    seedPowerlevel10kWizardEnv(merged, { envToDelete })
-    return merged
+    if (!supported && this.agentSessionCreateOperationCapability === probe) {
+      // Why: negative capability results must follow a relay upgraded on the same connection.
+      this.agentSessionCreateOperationCapability = null
+    }
+    return supported
   }
 
   async attach(id: string): Promise<void> {
@@ -213,18 +240,19 @@ export class SshPtyProvider implements IPtyProvider {
   async attachForReconnect(
     id: string,
     expected?: { paneKey?: string; tabId?: string }
-  ): Promise<{ replay?: string }> {
+  ): Promise<SshPtyAttachResult> {
     // Why: reconnect owns replay delivery so stale/duplicate attach results can
     // be filtered before they reach the renderer. The expected identity lets the
     // relay reject a cross-generation id collision instead of reattaching this
     // lease to a different pane's freshly spawned PTY.
-    const result = (await this.mux.request('pty.attach', {
-      id: this.toRelayPtyId(id),
-      suppressReplayNotification: true,
-      ...(expected?.paneKey ? { expectedPaneKey: expected.paneKey } : {}),
-      ...(expected?.tabId ? { expectedTabId: expected.tabId } : {})
-    })) as { replay?: string } | undefined
-    return result ?? {}
+    return parseSshPtyAttachResult(
+      await this.mux.request('pty.attach', {
+        id: this.toRelayPtyId(id),
+        suppressReplayNotification: true,
+        ...(expected?.paneKey ? { expectedPaneKey: expected.paneKey } : {}),
+        ...(expected?.tabId ? { expectedTabId: expected.tabId } : {})
+      })
+    )
   }
 
   write(id: string, data: string): void {
@@ -288,10 +316,7 @@ export class SshPtyProvider implements IPtyProvider {
 
   async listProcesses(): Promise<PtyProcessInfo[]> {
     const result = await this.mux.request('pty.listProcesses')
-    return (result as PtyProcessInfo[]).map((session) => ({
-      ...session,
-      id: this.toAppPtyId(session.id)
-    }))
+    return mapSshPtyProcessList(result as PtyProcessInfo[], (id) => this.toAppPtyId(id))
   }
 
   async getDefaultShell(): Promise<string> {
@@ -304,17 +329,17 @@ export class SshPtyProvider implements IPtyProvider {
     return result as { name: string; path: string }[]
   }
 
-  onData(callback: DataCallback): () => void {
+  onData(callback: SshPtyDataCallback): () => void {
     this.dataListeners.add(callback)
     return () => this.dataListeners.delete(callback)
   }
 
-  onReplay(callback: ReplayCallback): () => void {
+  onReplay(callback: SshPtyReplayCallback): () => void {
     this.replayListeners.add(callback)
     return () => this.replayListeners.delete(callback)
   }
 
-  onExit(callback: ExitCallback): () => void {
+  onExit(callback: SshPtyExitCallback): () => void {
     this.exitListeners.add(callback)
     return () => this.exitListeners.delete(callback)
   }

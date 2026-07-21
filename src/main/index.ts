@@ -43,6 +43,7 @@ import { initOnboardingCohortClassifier } from './telemetry/onboarding-cohort-cl
 import { resolveConsent } from './telemetry/consent'
 import { triggerStartupNotificationRegistration } from './ipc/notifications'
 import { OrcaRuntimeService } from './runtime/orca-runtime'
+import { loadAgentSessionClaimSigner } from './runtime/agent-session-claim-identity'
 import { OrcaRuntimeRpcServer } from './runtime/runtime-rpc'
 import { DesktopRelayService } from './runtime/relay/desktop-relay-service'
 import type { RelayBrokerStatus } from './runtime/relay/relay-session-broker'
@@ -1943,6 +1944,10 @@ app.whenReady().then(async () => {
       .map((account) => ({ id: account.id, managedHomePath: account.managedHomePath }))
   })
   const runtimeService = new OrcaRuntimeService(store, stats, {
+    agentSessionClaimSigner: loadAgentSessionClaimSigner(
+      getProfileUserDataPath(),
+      getProfileUserDataPath()
+    ),
     // Why: resolve the PTY provider lazily. initDaemonPtyProvider() runs later
     // inside attachMainWindowServices and calls setLocalPtyProvider(routedAdapter)
     // to swap the in-process provider for the daemon-routed one. Capturing the

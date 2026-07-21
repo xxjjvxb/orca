@@ -58,7 +58,7 @@ describe('launchAiVaultSessionInNewTab', () => {
     vi.clearAllMocks()
     runtimeMocks.getRuntimeEnvironmentIdForWorktree.mockReturnValue(null)
     runtimeMocks.isWebRuntimeSessionActive.mockReturnValue(false)
-    runtimeMocks.createWebRuntimeSessionTerminal.mockResolvedValue(true)
+    runtimeMocks.createWebRuntimeSessionTerminal.mockResolvedValue({ status: 'created' })
     mockState.tabsByWorktree = {}
     mockState.openFiles = []
     mockState.browserTabsByWorktree = {}
@@ -150,7 +150,8 @@ describe('launchAiVaultSessionInNewTab', () => {
         agentCommand: 'codex',
         agentArgs: '',
         agentEnv: { CODEX_PROFILE: 'runtime' }
-      }
+      },
+      providerSession: { key: 'session_id', id: 'session-1' }
     })
 
     expect(result.tabId).toBeNull()
@@ -158,6 +159,8 @@ describe('launchAiVaultSessionInNewTab', () => {
       worktreeId: 'wt-1',
       environmentId: 'env-1',
       targetGroupId: 'group-1',
+      agentSessionKind: 'resume',
+      launchAgent: 'codex',
       command: "codex resume 'session-1'",
       env: { CODEX_PROFILE: 'runtime' },
       launchConfig: {
@@ -165,14 +168,15 @@ describe('launchAiVaultSessionInNewTab', () => {
         agentArgs: '',
         agentEnv: { CODEX_PROFILE: 'runtime' }
       },
-      launchAgent: 'codex',
+      providerSession: { key: 'session_id', id: 'session-1' },
+      agentArgs: '',
       activate: true
     })
     expect(mockCreateTab).not.toHaveBeenCalled()
     expect(mockQueueTabStartupCommand).not.toHaveBeenCalled()
 
     if (result.tabId === null) {
-      await expect(result.runtimeLaunch).resolves.toBe(true)
+      await expect(result.runtimeLaunch).resolves.toEqual({ status: 'created' })
     }
     expect(mockSetActiveTabType).toHaveBeenCalledWith('terminal')
   })

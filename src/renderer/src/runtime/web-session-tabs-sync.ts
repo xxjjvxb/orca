@@ -27,8 +27,7 @@ import type {
   TabGroupLayoutNode,
   TerminalLayoutSnapshot,
   TerminalPaneLayoutNode,
-  TerminalTab,
-  TuiAgent
+  TerminalTab
 } from '../../../shared/types'
 import type { OpenFile } from '../store/slices/editor'
 import { isTerminalLeafId, makePaneKey, parsePaneKey } from '../../../shared/stable-pane-id'
@@ -70,6 +69,12 @@ import {
 } from './web-runtime-wake-terminal-respawn'
 import { isRuntimeSubscriptionReplayResponse } from '../../../shared/runtime-subscription-replay'
 import { queueAcceptedWebSessionTerminalSnapshot } from './web-session-terminal-handle-events'
+import {
+  clearWebAgentSessionHandoff,
+  clearWebAgentSessionHandoffsForEnvironment,
+  clearWebAgentSessionHandoffsForWorktree,
+  resolveWebAgentSessionHandoff
+} from './web-agent-session-handoff'
 
 const WEB_SESSION_GROUP_PREFIX = 'web-session-tabs:'
 
@@ -146,7 +151,8 @@ export type WebSessionTabsSyncState = Pick<
   | 'unifiedTabsByWorktree'
   | 'unreadTerminalTabs'
   | 'sortEpoch'
->
+> &
+  Partial<Pick<AppState, 'automaticAgentResumeClaimsByTabId' | 'pendingStartupByTabId'>>
 
 function isSessionTabsListAllResult(value: unknown): value is SessionTabsListAllResult {
   return (
@@ -323,6 +329,7 @@ function clearWebSessionTabsTrackingForWorktree(environmentId: string, worktreeI
   lastHostTerminalTabCountByWorktree.delete(key)
   clearWebRuntimeWakeTerminalRespawnForWorktree(worktreeId)
   clearWebSessionReorderIntentsForWorktree(worktreeId)
+  clearWebAgentSessionHandoffsForWorktree(environmentId, worktreeId)
   const keyPrefix = `${environmentId}:${worktreeId}:`
   for (const key of hostSessionTabIdByLocalKey.keys()) {
     if (key.startsWith(keyPrefix)) {
@@ -352,6 +359,7 @@ export function clearWebSessionTabsTrackingForEnvironment(environmentId: string)
       hostSessionTabIdByLocalKey.delete(key)
     }
   }
+  clearWebAgentSessionHandoffsForEnvironment(trimmedEnvironmentId)
   clearAllWebRuntimeWakeTerminalRespawn()
 }
 
@@ -480,15 +488,11 @@ function shouldReplaceTerminalTab(
   environmentId: string,
   nextRemotePtyIds: ReadonlySet<string>,
   nextMirroredTerminalIds: ReadonlySet<string>,
-  nextMirroredLaunchAgents: ReadonlySet<TuiAgent>
+  exactProvisionalHandoffs: ReadonlySet<string>
 ): boolean {
-  if (
-    tab.launchAgent &&
-    !isMirroredTerminalSurfaceId(tab.id) &&
-    nextMirroredLaunchAgents.has(tab.launchAgent)
-  ) {
-    // Why: paired web agent quick-launch used to create local-only tabs before
-    // the host snapshot landed. Retire only the matching agent's stale row.
+  if (exactProvisionalHandoffs.has(tab.id)) {
+    // Why: agent kind is not session identity; retire only the provisional tab
+    // whose request or structured response identifies this exact host surface.
     return true
   }
   if (isMirroredTerminalSurfaceId(tab.id)) {
@@ -1734,10 +1738,22 @@ export function applyWebSessionTabsSnapshot(
   const nextMirroredTerminalIds = new Set(
     terminalSurfaceTabs.map((tab) => toWebTerminalSurfaceTabId(tab.parentTabId))
   )
-  const nextMirroredLaunchAgents = new Set(
-    terminalSurfaceTabs
-      .map((tab) => tab.launchAgent)
-      .filter((agent): agent is TuiAgent => Boolean(agent))
+  const nextHostTerminalTabIds = new Set(terminalSurfaceTabs.map((tab) => tab.parentTabId))
+  const exactProvisionalHandoffs = new Set(
+    currentTerminalTabs
+      .filter((tab) => !isMirroredTerminalSurfaceId(tab.id))
+      .filter((tab) => {
+        if (nextHostTerminalTabIds.has(tab.id)) {
+          return true
+        }
+        const hostTabId = resolveWebAgentSessionHandoff({
+          environmentId,
+          worktreeId,
+          provisionalTabId: tab.id
+        })
+        return hostTabId !== null && nextHostTerminalTabIds.has(hostTabId)
+      })
+      .map((tab) => tab.id)
   )
   const retainedTerminalTabs = currentTerminalTabs.filter(
     (tab) =>
@@ -1746,7 +1762,7 @@ export function applyWebSessionTabsSnapshot(
         environmentId,
         nextRemotePtyIds,
         nextMirroredTerminalIds,
-        nextMirroredLaunchAgents
+        exactProvisionalHandoffs
       )
   )
   const mirroredTerminalTabs = buildMirroredTerminalTabs(
@@ -1767,6 +1783,9 @@ export function applyWebSessionTabsSnapshot(
   const removedTerminalIds = new Set(
     currentTerminalTabs.filter((tab) => !retainedTerminalIds.has(tab.id)).map((tab) => tab.id)
   )
+  for (const provisionalTabId of exactProvisionalHandoffs) {
+    clearWebAgentSessionHandoff({ environmentId, worktreeId, provisionalTabId })
+  }
 
   const targetGroupId = chooseTargetGroupId(state, snapshot)
   const hostGroupIdByTabId = buildHostGroupIdByTabId(snapshot.tabGroups)
@@ -2165,6 +2184,27 @@ export function applyWebSessionTabsSnapshot(
     }
   }
 
+  const pendingStartupByTabId = state.pendingStartupByTabId ?? {}
+  let nextPendingStartupByTabId = pendingStartupByTabId
+  const automaticAgentResumeClaimsByTabId = state.automaticAgentResumeClaimsByTabId ?? {}
+  let nextAutomaticAgentResumeClaimsByTabId = automaticAgentResumeClaimsByTabId
+  for (const removedId of exactProvisionalHandoffs) {
+    if (nextPendingStartupByTabId[removedId]) {
+      nextPendingStartupByTabId =
+        nextPendingStartupByTabId === pendingStartupByTabId
+          ? { ...pendingStartupByTabId }
+          : nextPendingStartupByTabId
+      delete nextPendingStartupByTabId[removedId]
+    }
+    if (nextAutomaticAgentResumeClaimsByTabId[removedId]) {
+      nextAutomaticAgentResumeClaimsByTabId =
+        nextAutomaticAgentResumeClaimsByTabId === automaticAgentResumeClaimsByTabId
+          ? { ...automaticAgentResumeClaimsByTabId }
+          : nextAutomaticAgentResumeClaimsByTabId
+      delete nextAutomaticAgentResumeClaimsByTabId[removedId]
+    }
+  }
+
   let nextBrowserPagesByWorkspace = state.browserPagesByWorkspace
   let nextRemoteBrowserPageHandlesByPageId = state.remoteBrowserPageHandlesByPageId
   let nextBrowserCertificateFailuresByPageId = state.browserCertificateFailuresByPageId
@@ -2432,6 +2472,12 @@ export function applyWebSessionTabsSnapshot(
       : {}),
     ...(nextUnreadTerminalTabs !== state.unreadTerminalTabs
       ? { unreadTerminalTabs: nextUnreadTerminalTabs }
+      : {}),
+    ...(nextPendingStartupByTabId !== pendingStartupByTabId
+      ? { pendingStartupByTabId: nextPendingStartupByTabId }
+      : {}),
+    ...(nextAutomaticAgentResumeClaimsByTabId !== automaticAgentResumeClaimsByTabId
+      ? { automaticAgentResumeClaimsByTabId: nextAutomaticAgentResumeClaimsByTabId }
       : {}),
     ...(nextBrowserPagesByWorkspace !== state.browserPagesByWorkspace
       ? { browserPagesByWorkspace: nextBrowserPagesByWorkspace }

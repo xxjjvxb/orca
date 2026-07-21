@@ -30,6 +30,7 @@ import { translate } from '@/i18n/i18n'
 import { getConnectionIdFromState } from '@/lib/connection-context'
 import { resolveNativeChatSessionOptionDefaults } from '../../../shared/native-chat-session-option-defaults'
 import { seedNativeChatAppliedSessionOptions } from '@/components/native-chat/native-chat-session-option-cache'
+import { toAgentLaunchPreferences } from '@/runtime/agent-session-create-operation'
 
 export type LaunchAgentInNewTabArgs = {
   agent: TuiAgent
@@ -223,6 +224,7 @@ export function launchAgentInNewTab(args: LaunchAgentInNewTabArgs): LaunchAgentI
   })
 
   const runtimeEnvironmentId = getRuntimeEnvironmentIdForWorktree(store, worktreeId)
+  const launchPreferences = toAgentLaunchPreferences(startupPlan.sessionOptions)
   if (isWebRuntimeSessionActive(runtimeEnvironmentId) && pasteDraftAfterLaunch === null) {
     launchAgentInWebHostTab({
       agent,
@@ -230,7 +232,21 @@ export function launchAgentInNewTab(args: LaunchAgentInNewTabArgs): LaunchAgentI
       environmentId: runtimeEnvironmentId,
       groupId,
       hasPrompt,
-      startupPlan,
+      ...(hasPrompt ? { prompt: trimmedPrompt } : {}),
+      ...(hasPrompt
+        ? {
+            promptDelivery:
+              promptDelivery === 'draft' ? ('draft' as const) : ('auto-submit' as const)
+          }
+        : {}),
+      ...(agentArgs !== undefined ? { agentArgs } : {}),
+      ...(launchPreferences ? { launchPreferences } : {}),
+      command: startupPlan.launchCommand,
+      ...(startupPlan.env ? { env: startupPlan.env } : {}),
+      launchConfig: startupPlan.launchConfig,
+      ...(startupPlan.startupCommandDelivery
+        ? { startupCommandDelivery: startupPlan.startupCommandDelivery }
+        : {}),
       // Why: omission means terminal locally, but would let a paired host apply
       // its own default; send the client's resolved terminal choice explicitly.
       viewMode: initialViewModeProps.viewMode ?? 'terminal',
@@ -259,6 +275,8 @@ export function launchAgentInNewTab(args: LaunchAgentInNewTabArgs): LaunchAgentI
     ...(startupPlan.env ? { env: startupPlan.env } : {}),
     launchConfig: startupPlan.launchConfig,
     launchAgent: agent,
+    ...(agentArgs !== undefined ? { agentArgsOverride: agentArgs } : {}),
+    ...(startupPlan.sessionOptions ? { sessionOptions: startupPlan.sessionOptions } : {}),
     ...(startupPlan.startupCommandDelivery
       ? { startupCommandDelivery: startupPlan.startupCommandDelivery }
       : {}),
