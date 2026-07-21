@@ -67,10 +67,14 @@ export async function tryDispatchRemoteLinearWriteCli(
   env: Record<string, string>,
   stdin?: string
 ): Promise<RpcResponse | null> {
-  for (const operation of ['add', 'remove'] as const) {
-    if (isRemoteCommand(parsed, 'linear', 'relation', operation)) {
-      return await dispatchRemoteLinearRelationWrite(dispatcher, parsed, env, operation)
-    }
+  if (isRemoteCommand(parsed, 'linear', 'relation', 'add')) {
+    return await dispatchRemoteLinearRelationWrite(dispatcher, parsed, env, 'add')
+  }
+  if (
+    isRemoteCommand(parsed, 'linear', 'relation', 'remove') ||
+    isRemoteCommand(parsed, 'linear', 'relation', 'rm')
+  ) {
+    return await dispatchRemoteLinearRelationWrite(dispatcher, parsed, env, 'remove')
   }
   if (isRemoteCommand(parsed, 'linear', 'status', 'set')) {
     validateLinearRemoteArgs(parsed, LINEAR_STATUS_FLAGS, ['linear', 'status', 'set'], 1, 'id')

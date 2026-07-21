@@ -1,15 +1,18 @@
+import { LinearClient } from '@linear/sdk'
 import type {
   LinearIssueRelationship,
   LinearIssueRelationWriteResult
 } from '../../shared/linear-issue-relation-write'
+import { LINEAR_ISSUE_API_PAGE_SIZE_MAX } from '../../shared/linear-issue-read-limits'
 import { acquire, clearToken, getClients, isAuthError, release } from './client'
-import { readConnectionPages } from './issue-context-pagination'
+import { linearError } from './issue-context-errors'
 import {
   INVERSE_RELATIONS_QUERY,
   RELATIONS_QUERY,
   type RawRelationNode,
   type RawRelationsResponse
 } from './issue-context-raw'
+import { LinearWriteFailure } from './issues'
 
 const RELATION_WRITE_READ_CAP = 250
 
@@ -20,6 +23,8 @@ type RelationMutationResponse = {
   } | null
   issueRelationDelete?: { success?: boolean } | null
 }
+
+type RelationDirection = 'outbound' | 'inbound'
 
 const CREATE_RELATION_MUTATION = `
   mutation OrcaLinearCreateIssueRelation($input: IssueRelationCreateInput!) {
@@ -47,19 +52,18 @@ export async function writeIssueRelation(params: {
   relationship: LinearIssueRelationship
   operation: 'add' | 'remove'
   workspaceId: string
+  signal?: AbortSignal
 }): Promise<LinearIssueRelationWriteResult> {
   const entry = getClients(params.workspaceId)[0]
   if (!entry) {
-    throw new Error('Not connected to Linear')
+    throw new LinearWriteFailure('failed', 'Not connected to Linear')
   }
   await acquire()
   try {
-    const relations = await readRelations(entry, params.issue.id)
-    const existing = relations.find(
-      (relation) =>
-        relation.relationship === params.relationship &&
-        relation.relatedIssue?.id === params.relatedIssue.id
-    )
+    const client = params.signal
+      ? new LinearClient({ apiKey: entry.apiKey, signal: params.signal })
+      : entry.client
+    const existing = await findExistingRelation(client, params)
     if (params.operation === 'add' && existing) {
       return result(params, existing, true)
     }
@@ -67,23 +71,22 @@ export async function writeIssueRelation(params: {
       return result(params, absentRelation(params), true)
     }
     if (params.operation === 'remove' && existing) {
-      const raw = await entry.client.client.rawRequest<
-        RelationMutationResponse,
-        Record<string, unknown>
-      >(DELETE_RELATION_MUTATION, { id: existing.id })
+      const raw = await client.client.rawRequest<RelationMutationResponse, Record<string, unknown>>(
+        DELETE_RELATION_MUTATION,
+        { id: existing.id }
+      )
       if (raw.data?.issueRelationDelete?.success !== true) {
-        throw new Error('Linear relation removal failed')
+        throw new LinearWriteFailure('failed', 'Linear relation removal failed')
       }
       return result(params, existing, false)
     }
-    const input = relationCreateInput(params)
-    const raw = await entry.client.client.rawRequest<
-      RelationMutationResponse,
-      Record<string, unknown>
-    >(CREATE_RELATION_MUTATION, { input })
+    const raw = await client.client.rawRequest<RelationMutationResponse, Record<string, unknown>>(
+      CREATE_RELATION_MUTATION,
+      { input: relationCreateInput(params) }
+    )
     const created = raw.data?.issueRelationCreate
     if (created?.success !== true || !created.issueRelation) {
-      throw new Error('Linear relation creation failed')
+      throw new LinearWriteFailure('failed', 'Linear relation creation failed')
     }
     return result(params, normalizeRelation(created.issueRelation, params.issue.id), false)
   } catch (error) {
@@ -96,34 +99,96 @@ export async function writeIssueRelation(params: {
   }
 }
 
-async function readRelations(
-  entry: ReturnType<typeof getClients>[number],
-  issueId: string
-): Promise<LinearIssueRelationWriteResult['relation'][]> {
-  const outbound = await readConnectionPages(RELATION_WRITE_READ_CAP, async (page) => {
-    const raw = await entry.client.client.rawRequest<RawRelationsResponse, Record<string, unknown>>(
-      RELATIONS_QUERY,
-      { id: issueId, ...page }
+async function findExistingRelation(
+  client: LinearClient,
+  params: {
+    issue: { id: string; identifier: string }
+    relatedIssue: { id: string }
+    relationship: LinearIssueRelationship
+  }
+): Promise<LinearIssueRelationWriteResult['relation'] | null> {
+  for (const direction of relationDirections(params.relationship)) {
+    const scan = await findRelationInDirection(client, params, direction)
+    if (scan.relation) {
+      return scan.relation
+    }
+    if (scan.hasMore) {
+      throw linearError(
+        'linear_write_failed',
+        `Cannot safely modify ${params.issue.identifier}: more than ${RELATION_WRITE_READ_CAP} relevant relations must be checked.`,
+        {
+          cap: RELATION_WRITE_READ_CAP,
+          nextSteps: [
+            `Remove stale relations from ${params.issue.identifier} in Linear, then retry.`
+          ]
+        }
+      )
+    }
+  }
+  return null
+}
+
+async function findRelationInDirection(
+  client: LinearClient,
+  params: {
+    issue: { id: string }
+    relatedIssue: { id: string }
+    relationship: LinearIssueRelationship
+  },
+  direction: RelationDirection
+): Promise<{ relation: LinearIssueRelationWriteResult['relation'] | null; hasMore: boolean }> {
+  let after: string | undefined
+  let inspected = 0
+
+  while (inspected < RELATION_WRITE_READ_CAP) {
+    const first = Math.min(LINEAR_ISSUE_API_PAGE_SIZE_MAX, RELATION_WRITE_READ_CAP - inspected)
+    const raw = await client.client.rawRequest<RawRelationsResponse, Record<string, unknown>>(
+      direction === 'outbound' ? RELATIONS_QUERY : INVERSE_RELATIONS_QUERY,
+      { id: params.issue.id, first, ...(after ? { after } : {}) }
     )
-    return raw.data?.issue?.relations ?? null
-  })
-  const inverse = await readConnectionPages(RELATION_WRITE_READ_CAP, async (page) => {
-    const raw = await entry.client.client.rawRequest<RawRelationsResponse, Record<string, unknown>>(
-      INVERSE_RELATIONS_QUERY,
-      { id: issueId, ...page }
-    )
-    return raw.data?.issue?.inverseRelations ?? null
-  })
-  return [
-    ...outbound.nodes.map((node) => normalizeRelation(node, issueId, 'outbound')),
-    ...inverse.nodes.map((node) => normalizeRelation(node, issueId, 'inbound'))
-  ]
+    const connection =
+      direction === 'outbound' ? raw.data?.issue?.relations : raw.data?.issue?.inverseRelations
+    const nodes = (connection?.nodes ?? []).slice(0, first)
+    const relation = nodes
+      .map((node) => normalizeRelation(node, params.issue.id, direction))
+      .find(
+        (candidate) =>
+          candidate.relationship === params.relationship &&
+          candidate.relatedIssue?.id === params.relatedIssue.id
+      )
+    if (relation) {
+      return { relation, hasMore: false }
+    }
+
+    inspected += nodes.length
+    const hasMore = connection?.pageInfo?.hasNextPage === true
+    const nextCursor = connection?.pageInfo?.endCursor ?? undefined
+    if (!hasMore) {
+      return { relation: null, hasMore: false }
+    }
+    if (!nextCursor || nextCursor === after || nodes.length === 0) {
+      return { relation: null, hasMore: true }
+    }
+    after = nextCursor
+  }
+
+  return { relation: null, hasMore: true }
+}
+
+function relationDirections(relationship: LinearIssueRelationship): RelationDirection[] {
+  if (relationship === 'blockedBy') {
+    return ['inbound']
+  }
+  if (relationship === 'relatedTo') {
+    return ['outbound', 'inbound']
+  }
+  return ['outbound']
 }
 
 function normalizeRelation(
   node: RawRelationNode,
   issueId: string,
-  knownDirection?: 'outbound' | 'inbound'
+  knownDirection?: RelationDirection
 ): LinearIssueRelationWriteResult['relation'] {
   const outbound = knownDirection
     ? knownDirection === 'outbound'
@@ -134,18 +199,7 @@ function normalizeRelation(
     id: node.id,
     type,
     direction: outbound ? 'outbound' : 'inbound',
-    relationship:
-      type === 'blocks'
-        ? outbound
-          ? 'blocks'
-          : 'blockedBy'
-        : type === 'duplicate'
-          ? outbound
-            ? 'duplicateOf'
-            : 'duplicatedBy'
-          : type === 'similar'
-            ? 'similar'
-            : 'relatedTo',
+    relationship: relationPerspective(type, outbound),
     relatedIssue: neighbor
       ? {
           id: neighbor.id,
@@ -155,6 +209,22 @@ function normalizeRelation(
         }
       : null
   }
+}
+
+function relationPerspective(
+  type: string | null,
+  outbound: boolean
+): LinearIssueRelationWriteResult['relation']['relationship'] {
+  if (type === 'blocks') {
+    return outbound ? 'blocks' : 'blockedBy'
+  }
+  if (type === 'duplicate') {
+    return outbound ? 'duplicateOf' : 'duplicatedBy'
+  }
+  if (type === 'similar') {
+    return 'similar'
+  }
+  return 'relatedTo'
 }
 
 function relationCreateInput(params: {

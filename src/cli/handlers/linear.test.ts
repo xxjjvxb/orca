@@ -282,6 +282,36 @@ describe('orca linear CLI handlers', () => {
     )
   })
 
+  it('dispatches relation rm through the remove handler', async () => {
+    queueFixtures(callMock, okFixture('req_relation_rm', relationWriteResult()))
+
+    await main(
+      [
+        'linear',
+        'relation',
+        'rm',
+        'ENG-123',
+        '--related',
+        'ENG-456',
+        '--type',
+        'related',
+        '--json'
+      ],
+      '/tmp/repo'
+    )
+
+    expect(callMock).toHaveBeenCalledWith(
+      'linear.issueRelationWrite',
+      expect.objectContaining({
+        input: 'ENG-123',
+        relatedInput: 'ENG-456',
+        relationship: 'relatedTo',
+        operation: 'remove'
+      }),
+      { timeoutMs: 75_000 }
+    )
+  })
+
   it('rejects impossible due dates before dispatch', async () => {
     await main(['linear', 'due-date', 'set', 'ENG-123', '--to', '2026-02-30'], '/tmp/repo')
 

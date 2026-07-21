@@ -72,6 +72,8 @@ Do not use `orca linear attach` to read screenshots. That command creates link a
 
 ```bash
 orca linear issue [<id>] [--current] [--comments] [--children] [--depth <n>] [--attachments] [--relations] [--full] [--workspace <id>] [--json]
+orca linear relation add [<id>] [--current] --related <issue> --type blocks|blocked-by|related|duplicate-of [--workspace <id>] [--json]
+orca linear relation remove [<id>] [--current] --related <issue> --type blocks|blocked-by|related|duplicate-of [--workspace <id>] [--json]
 orca linear search <query> [--limit <n>] [--workspace <id>|all] [--json]
 orca linear team list [--workspace <id>|all] [--json]
 orca linear team members --team <key|id> [--workspace <id>] [--json]

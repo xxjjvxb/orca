@@ -16,6 +16,7 @@ export const LINEAR_COMMAND_SPECS: CommandSpec[] = [
   },
   {
     path: ['linear', 'relation', 'remove'],
+    aliases: [['linear', 'relation', 'rm']],
     summary: 'Remove a Linear issue relation',
     usage:
       'orca linear relation remove [<id>] [--current] --related <issue> --type blocks|blocked-by|related|duplicate-of [--workspace <id>] [--json]',

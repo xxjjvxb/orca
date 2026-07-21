@@ -205,7 +205,11 @@ function formatLinearTaskUpdate(result: LinearIssueTaskUpdateResult): string {
 
 function formatLinearRelationWrite(result: LinearIssueRelationWriteResult): string {
   const verb = result.operation === 'add' ? 'Added' : 'Removed'
-  const suffix = result.meta.alreadySet ? ' (already set)' : ''
+  const suffix = result.meta.alreadySet
+    ? result.operation === 'add'
+      ? ' (already present)'
+      : ' (already absent)'
+    : ''
   return `${verb} ${result.issue.identifier} ${result.relation.relationship} ${result.relatedIssue.identifier}${suffix}.`
 }
 

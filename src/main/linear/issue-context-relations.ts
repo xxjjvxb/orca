@@ -29,7 +29,10 @@ export async function readIssueRelations(
     .slice(0, LINEAR_RELATIONS_CAP)
     .map((node) => mapRelation(node, 'outbound', node.relatedIssue))
   const remaining = LINEAR_RELATIONS_CAP - outbound.length
-  const inverse = await readConnectionPages(remaining, async (page) => {
+  // Why: when outbound relations exactly fill the cap, probe inverse relations so
+  // the response cannot claim completeness while silently omitting inbound ones.
+  const inverseReadLimit = Math.max(1, remaining)
+  const inverse = await readConnectionPages(inverseReadLimit, async (page) => {
     return await withLinearRead(entry, async () => {
       const raw = await entry.client.client.rawRequest<
         RawRelationsResponse,
@@ -42,9 +45,14 @@ export async function readIssueRelations(
     .slice(0, remaining)
     .map((node) => mapRelation(node, 'inbound', node.issue))
   const items = [...outbound, ...inbound]
+  const inverseOverflow = inverse.nodes.length > remaining
   return {
     items,
-    meta: collectionMeta(items.length, LINEAR_RELATIONS_CAP, response.hasMore || inverse.hasMore)
+    meta: collectionMeta(
+      items.length,
+      LINEAR_RELATIONS_CAP,
+      response.hasMore || inverse.hasMore || inverseOverflow
+    )
   }
 }
 

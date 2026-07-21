@@ -95,4 +95,53 @@ describe('Linear issue context relations', () => {
     expect(result.meta).toMatchObject({ returned: 3, cap: 100, capReached: false })
     expect(rawRequest).toHaveBeenCalledTimes(2)
   })
+
+  it('reports hidden inverse relations when outbound relations exactly fill the cap', async () => {
+    const outbound = (offset: number) =>
+      Array.from({ length: 50 }, (_, index) => ({
+        id: `relation-${offset + index}`,
+        type: 'blocks',
+        relatedIssue: rawIssue(`issue-${offset + index + 10}`, `ENG-${offset + index + 10}`)
+      }))
+    rawRequest
+      .mockResolvedValueOnce({
+        data: {
+          issue: {
+            relations: {
+              nodes: outbound(0),
+              pageInfo: { hasNextPage: true, endCursor: 'cursor-1' }
+            }
+          }
+        }
+      })
+      .mockResolvedValueOnce({
+        data: {
+          issue: {
+            relations: {
+              nodes: outbound(50),
+              pageInfo: { hasNextPage: false }
+            }
+          }
+        }
+      })
+      .mockResolvedValueOnce({
+        data: {
+          issue: {
+            inverseRelations: {
+              nodes: [
+                { id: 'hidden-inverse', type: 'blocks', issue: rawIssue('issue-2', 'ENG-2') }
+              ],
+              pageInfo: { hasNextPage: false }
+            }
+          }
+        }
+      })
+    const { readIssueRelations } = await import('./issue-context-relations')
+
+    const result = await readIssueRelations(resolvedIssue())
+
+    expect(result.items).toHaveLength(100)
+    expect(result.meta).toMatchObject({ returned: 100, capReached: true, hasMore: true })
+    expect(rawRequest.mock.calls[2]?.[1]).toMatchObject({ first: 1 })
+  })
 })

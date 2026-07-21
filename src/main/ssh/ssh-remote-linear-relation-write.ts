@@ -32,10 +32,11 @@ export async function dispatchRemoteLinearRelationWrite(
   env: Record<string, string>,
   operation: 'add' | 'remove'
 ): Promise<RpcResponse> {
+  const commandVerb = parsed.commandPath[3] === 'rm' ? 'rm' : operation
   validateLinearRemoteArgs(
     parsed,
     LINEAR_RELATION_FLAGS,
-    ['linear', 'relation', operation],
+    ['linear', 'relation', commandVerb],
     1,
     'id'
   )

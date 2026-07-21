@@ -15,7 +15,10 @@ export function getRemoteLinearWriteHelp(parsed: ParsedRemoteCli): string | null
   if (matchesRemoteCommand(path, 'linear', 'relation', 'add')) {
     return LINEAR_RELATION_ADD_HELP
   }
-  if (matchesRemoteCommand(path, 'linear', 'relation', 'remove')) {
+  if (
+    matchesRemoteCommand(path, 'linear', 'relation', 'remove') ||
+    matchesRemoteCommand(path, 'linear', 'relation', 'rm')
+  ) {
     return LINEAR_RELATION_REMOVE_HELP
   }
   if (matchesRemoteCommand(path, 'linear', 'status', 'set')) {
