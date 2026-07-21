@@ -23,6 +23,12 @@ const issue = {
 
 type SaveIssueInternals = {
   resolveLinearAssignee(input: string, teamId: string, workspaceId: string): Promise<string>
+  resolveLinearAgentState(input: string, states: unknown[]): unknown | null
+  buildLinearSaveUpdate(
+    params: { labels?: string[] },
+    current: typeof issue,
+    workspaceId: string
+  ): Promise<{ labelIds?: string[] }>
 }
 
 afterEach(() => {
@@ -125,5 +131,26 @@ describe('Linear save issue', () => {
     await expect(
       runtime.resolveLinearAssignee('ADA@EXAMPLE.COM', 'team-1', 'workspace-1')
     ).resolves.toBe('user-1')
+  })
+
+  it('resolves workflow lifecycle types while preferring exact state names', () => {
+    const runtime = new OrcaRuntimeService() as unknown as SaveIssueInternals
+    const states = [
+      { id: 'state-progress', name: 'In Progress', type: 'started' },
+      { id: 'state-started', name: 'Started', type: 'unstarted' }
+    ]
+
+    expect(runtime.resolveLinearAgentState('started', states)).toBe(states[1])
+    expect(runtime.resolveLinearAgentState('unstarted', states)).toBe(states[1])
+  })
+
+  it('clears labels without listing the team label catalog', async () => {
+    const runtime = new OrcaRuntimeService() as unknown as SaveIssueInternals
+    const listLabels = vi.spyOn(linearTeams, 'getTeamLabelsOrThrow')
+
+    await expect(
+      runtime.buildLinearSaveUpdate({ labels: [] }, issue, 'workspace-1')
+    ).resolves.toEqual({ labelIds: [] })
+    expect(listLabels).not.toHaveBeenCalled()
   })
 })

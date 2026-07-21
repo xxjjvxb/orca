@@ -1687,6 +1687,7 @@ export type LinearIssue = {
 
 export type LinearProjectSummary = {
   id: string
+  slugId?: string
   workspaceId?: string
   workspaceName?: string
   name: string
