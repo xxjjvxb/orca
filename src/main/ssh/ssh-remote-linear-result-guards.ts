@@ -4,6 +4,7 @@ import type {
   LinearCreateResult,
   LinearIssueContextResult,
   LinearIssueListResult,
+  LinearMcpIssueListResult,
   LinearIssueTaskUpdateResult,
   LinearProjectListResult,
   LinearSearchResult,
@@ -43,6 +44,16 @@ export function isLinearIssueListResult(result: unknown): result is LinearIssueL
     isRecord(result.meta) &&
     typeof result.meta.filter === 'string' &&
     typeof result.meta.hasMore === 'boolean'
+  )
+}
+
+export function isLinearMcpIssueListResult(result: unknown): result is LinearMcpIssueListResult {
+  return (
+    isRecord(result) &&
+    Array.isArray(result.issues) &&
+    isRecord(result.meta) &&
+    typeof result.meta.orderBy === 'string' &&
+    Array.isArray(result.meta.workspaceErrors)
   )
 }
 

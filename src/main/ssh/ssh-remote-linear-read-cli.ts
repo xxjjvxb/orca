@@ -7,6 +7,7 @@ import {
 import type { RpcDispatcher } from '../runtime/rpc/dispatcher'
 import type { RpcResponse } from '../runtime/rpc/core'
 import { RemoteCliArgumentError, type ParsedRemoteCli } from './ssh-remote-cli-argument-error'
+import { dispatchRemoteLinearListIssues } from './ssh-remote-linear-list-issues'
 
 import {
   LINEAR_ISSUE_FLAGS,
@@ -22,6 +23,9 @@ export async function tryDispatchRemoteLinearReadCli(
   parsed: ParsedRemoteCli,
   env: Record<string, string>
 ): Promise<RpcResponse | null> {
+  if (isRemoteCommand(parsed, 'linear', 'list-issues')) {
+    return await dispatchRemoteLinearListIssues(dispatcher, parsed)
+  }
   if (isRemoteCommand(parsed, 'linear', 'issue')) {
     validateLinearRemoteArgs(parsed, {
       command: ['linear', 'issue'],

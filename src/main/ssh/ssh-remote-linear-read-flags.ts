@@ -56,3 +56,27 @@ export const LINEAR_LIST_FLAGS = new Set([
   'limit',
   'workspace'
 ])
+export const LINEAR_MCP_ISSUE_LIST_FLAGS = new Set([
+  'help',
+  'json',
+  'pairing-code',
+  'environment',
+  'team',
+  'cycle',
+  'label',
+  'limit',
+  'query',
+  'state',
+  'cursor',
+  'order-by',
+  'project',
+  'release',
+  'assignee',
+  'delegate',
+  'parent-id',
+  'priority',
+  'created-at',
+  'updated-at',
+  'include-archived',
+  'workspace'
+])

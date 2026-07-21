@@ -5,6 +5,9 @@ export function getRemoteLinearReadHelp(commandPath: string[]): string | null {
   if (matchesRemoteCommand(commandPath, 'linear', 'issue')) {
     return LINEAR_ISSUE_HELP
   }
+  if (matchesRemoteCommand(commandPath, 'linear', 'list-issues')) {
+    return LINEAR_MCP_ISSUE_LIST_HELP
+  }
   if (matchesRemoteCommand(commandPath, 'linear', 'search')) {
     return LINEAR_SEARCH_HELP
   }
@@ -41,6 +44,7 @@ const LINEAR_HELP = `orca linear
 Usage: orca linear <command> [options]
 
 Commands:
+  list-issues        List Linear issues with MCP-compatible filters
   issue              Read Linear issue context for agents
   search             Search connected Linear workspaces
   team list          List connected Linear teams
@@ -92,6 +96,12 @@ Examples:
   $ orca linear issue ENG-123
   $ orca linear issue --current --comments
   $ orca linear issue https://linear.app/acme/issue/ENG-123 --full --json`
+
+const LINEAR_MCP_ISSUE_LIST_HELP = `orca linear list-issues
+
+Usage: orca linear list-issues [--team <team>] [--cycle <cycle>] [--label <label>] [--limit <n>] [--query <text>] [--state <state>] [--cursor <cursor>] [--order-by createdAt|updatedAt] [--project <project>] [--release <release>] [--assignee <user|me|null>] [--delegate <user|me|null>] [--parent-id <issue|null>] [--priority <0-4>] [--created-at <datetime|duration>] [--updated-at <datetime|duration>] [--include-archived] [--workspace <id>|all] [--json]
+
+List Linear issues with MCP-compatible filters and cursor pagination`
 
 const LINEAR_SEARCH_HELP = `orca linear search
 

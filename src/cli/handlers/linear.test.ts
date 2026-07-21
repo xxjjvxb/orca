@@ -93,6 +93,42 @@ describe('orca linear CLI handlers', () => {
     )
   })
 
+  it('maps MCP-compatible list-issues filters and cursor pagination', async () => {
+    queueFixtures(callMock, okFixture('req_list', issueResult()))
+
+    await main(
+      [
+        'linear',
+        'list-issues',
+        '--team',
+        'ENG',
+        '--assignee',
+        'me',
+        '--priority',
+        '2',
+        '--cursor',
+        'next-page',
+        '--order-by',
+        'createdAt',
+        '--include-archived',
+        '--json'
+      ],
+      '/tmp/repo'
+    )
+
+    expect(callMock).toHaveBeenCalledWith(
+      'linear.listIssues',
+      expect.objectContaining({
+        team: 'ENG',
+        assignee: 'me',
+        priority: 2,
+        cursor: 'next-page',
+        orderBy: 'createdAt',
+        includeArchived: true
+      })
+    )
+  })
+
   it('keeps global boolean flags before Linear commands from consuming command tokens', async () => {
     queueFixtures(callMock, okFixture('req_linear', issueResult()))
 

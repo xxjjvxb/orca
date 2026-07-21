@@ -41,6 +41,7 @@ const REMOTE_BOOLEAN_FLAGS = new Set([
   'full',
   'help',
   'inject',
+  'include-archived',
   'json',
   'me',
   'relations',

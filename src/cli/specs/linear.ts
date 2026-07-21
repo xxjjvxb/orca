@@ -3,6 +3,38 @@ import { GLOBAL_FLAGS } from '../args'
 
 export const LINEAR_COMMAND_SPECS: CommandSpec[] = [
   {
+    path: ['linear', 'list-issues'],
+    summary: 'List Linear issues with MCP-compatible filters',
+    usage:
+      'orca linear list-issues [--team <team>] [--cycle <cycle>] [--label <label>] [--limit <n>] [--query <text>] [--state <state>] [--cursor <cursor>] [--order-by createdAt|updatedAt] [--project <project>] [--release <release>] [--assignee <user|me|null>] [--delegate <user|me|null>] [--parent-id <issue|null>] [--priority <0-4>] [--created-at <datetime|duration>] [--updated-at <datetime|duration>] [--include-archived] [--workspace <id>|all] [--json]',
+    allowedFlags: [
+      ...GLOBAL_FLAGS,
+      'team',
+      'cycle',
+      'label',
+      'limit',
+      'query',
+      'state',
+      'cursor',
+      'order-by',
+      'project',
+      'release',
+      'assignee',
+      'delegate',
+      'parent-id',
+      'priority',
+      'created-at',
+      'updated-at',
+      'include-archived',
+      'workspace'
+    ],
+    examples: [
+      'orca linear list-issues --team ENG --state started --assignee me --json',
+      'orca linear list-issues --query auth --updated-at -P7D --limit 100 --json',
+      'orca linear list-issues --cursor <cursor> --workspace <id> --json'
+    ]
+  },
+  {
     path: ['linear', 'issue'],
     summary: 'Read Linear issue context for agents',
     usage:

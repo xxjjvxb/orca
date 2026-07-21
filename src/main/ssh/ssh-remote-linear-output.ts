@@ -1,6 +1,7 @@
 import type {
   LinearIssueContextResult,
   LinearIssueListResult,
+  LinearMcpIssueListResult,
   LinearIssueTaskUpdateResult,
   LinearProjectListResult,
   LinearSearchIssueSummary,
@@ -24,6 +25,7 @@ import {
   isLinearCreateResult,
   isLinearIssueContextResult,
   isLinearIssueListResult,
+  isLinearMcpIssueListResult,
   isLinearProjectListResult,
   isLinearSearchResult,
   isLinearStatusSetResult,
@@ -42,6 +44,12 @@ export function formatRemoteLinearCli(result: unknown): { stdout: string; stderr
     return {
       stdout: `${formatLinearIssueRows(result.issues)}\n`,
       stderr: linearListWarnings(result, 'Linear search')
+    }
+  }
+  if (isLinearMcpIssueListResult(result)) {
+    return {
+      stdout: `${formatLinearIssueRows(result.issues)}\n`,
+      stderr: linearMcpListWarnings(result)
     }
   }
   if (isLinearIssueListResult(result)) {
@@ -245,6 +253,18 @@ function linearListWarnings(
   }
   for (const error of meta.workspaceErrors ?? []) {
     warnings.push(`warning: ${error.workspace.name} unavailable for ${label}: ${error.message}`)
+  }
+  return warnings.length > 0 ? `${warnings.join('\n')}\n` : ''
+}
+
+function linearMcpListWarnings(result: LinearMcpIssueListResult): string {
+  const warnings = result.meta.workspaceErrors.map(
+    (error) => `warning: ${error.workspace.name} unavailable for Linear: ${error.message}`
+  )
+  if (result.meta.hasMore) {
+    warnings.unshift(
+      `warning: more results available; next cursor: ${result.meta.nextCursor ?? 'n/a'}`
+    )
   }
   return warnings.length > 0 ? `${warnings.join('\n')}\n` : ''
 }

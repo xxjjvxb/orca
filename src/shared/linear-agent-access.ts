@@ -92,6 +92,7 @@ export type {
   LinearIssueTaskUpdateResult
 } from './linear-agent-result-types'
 export type { LinearInlineMedia } from './linear-inline-media'
+export type { LinearMcpIssueListRequest, LinearMcpIssueListResult } from './linear-mcp-issue-list'
 
 export type LinearWriteTargetRequest = {
   input?: string
