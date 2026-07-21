@@ -25,10 +25,13 @@ const {
   healthCheckDaemonMock,
   getMacDaemonSystemResolverHealthMock,
   getDaemonLaunchIdentityMock,
+  getVerifiedDaemonPidMock,
   isDaemonStaleForCurrentBundleMock,
   killStaleDaemonMock,
   getProcessStartedAtMsMock,
   parseDaemonPidFileMock,
+  parseMacosGuiSessionScopeMock,
+  readMacosProcessSessionIdentityMock,
   unlinkOwnedDaemonPidFileMock,
   daemonClientMock,
   spawnerInstances,
@@ -82,6 +85,7 @@ const {
   const healthCheckDaemonMock = vi.fn(async () => true)
   const getMacDaemonSystemResolverHealthMock = vi.fn(() => 'healthy')
   const getDaemonLaunchIdentityMock = vi.fn(() => 'match')
+  const getVerifiedDaemonPidMock = vi.fn(async () => 12345)
   const isDaemonStaleForCurrentBundleMock = vi.fn(() => false)
   const killStaleDaemonMock = vi.fn(async () => true)
   const getProcessStartedAtMsMock = vi.fn((): number | null => 1_000_000)
@@ -89,6 +93,16 @@ const {
     (): { pid: number; startedAtMs: number | null } | null => null
   )
   const unlinkOwnedDaemonPidFileMock = vi.fn(() => true)
+  const parseMacosGuiSessionScopeMock = vi.fn((scope: string | undefined) => {
+    const parts = scope?.split(':')
+    return parts?.length === 4
+      ? { uid: Number(parts[1]), auditSessionId: Number(parts[2]), bootSessionId: parts[3] }
+      : null
+  })
+  const readMacosProcessSessionIdentityMock = vi.fn(async () => ({
+    uid: 501,
+    auditSessionId: 1001
+  }))
 
   const daemonClientMock = vi.fn().mockImplementation(function MockDaemonClient() {
     return {
@@ -162,10 +176,13 @@ const {
     healthCheckDaemonMock,
     getMacDaemonSystemResolverHealthMock,
     getDaemonLaunchIdentityMock,
+    getVerifiedDaemonPidMock,
     isDaemonStaleForCurrentBundleMock,
     killStaleDaemonMock,
     getProcessStartedAtMsMock,
     parseDaemonPidFileMock,
+    parseMacosGuiSessionScopeMock,
+    readMacosProcessSessionIdentityMock,
     unlinkOwnedDaemonPidFileMock,
     daemonClientMock,
     spawnerInstances,
@@ -201,6 +218,7 @@ type MockAdapter = {
     historyPath?: string
     respawn?: () => Promise<void>
     protocolVersion?: number
+    runtimeScope?: string
   }
   getActiveSessionIds: ReturnType<typeof vi.fn>
   fanoutSyntheticExits: ReturnType<typeof vi.fn>
@@ -242,12 +260,18 @@ vi.mock('net', () => ({ connect: netConnectMock }))
 vi.mock('./daemon-health', () => ({
   checkDaemonHealth: checkDaemonHealthMock,
   getDaemonLaunchIdentity: getDaemonLaunchIdentityMock,
+  getVerifiedDaemonPid: getVerifiedDaemonPidMock,
   getMacDaemonSystemResolverHealth: getMacDaemonSystemResolverHealthMock,
   healthCheckDaemon: healthCheckDaemonMock,
   isDaemonStaleForCurrentBundle: isDaemonStaleForCurrentBundleMock,
   killStaleDaemon: killStaleDaemonMock,
   getProcessStartedAtMs: getProcessStartedAtMsMock,
   parseDaemonPidFile: parseDaemonPidFileMock
+}))
+
+vi.mock('./macos-gui-session-scope', () => ({
+  parseMacosGuiSessionScope: parseMacosGuiSessionScopeMock,
+  readMacosProcessSessionIdentity: readMacosProcessSessionIdentityMock
 }))
 
 vi.mock('./client', () => ({ DaemonClient: daemonClientMock }))
@@ -398,6 +422,11 @@ async function importFresh() {
   getMacDaemonSystemResolverHealthMock.mockReset()
   getMacDaemonSystemResolverHealthMock.mockReturnValue('healthy')
   getDaemonLaunchIdentityMock.mockClear()
+  getVerifiedDaemonPidMock.mockReset()
+  getVerifiedDaemonPidMock.mockResolvedValue(12345)
+  parseMacosGuiSessionScopeMock.mockClear()
+  readMacosProcessSessionIdentityMock.mockReset()
+  readMacosProcessSessionIdentityMock.mockResolvedValue({ uid: 501, auditSessionId: 1001 })
   isDaemonStaleForCurrentBundleMock.mockReset()
   isDaemonStaleForCurrentBundleMock.mockReturnValue(false)
   killStaleDaemonMock.mockClear()
@@ -904,6 +933,76 @@ describe('daemon-init: runRestartDaemon (7-step sequence)', () => {
     const { DaemonPtyRouter } = await import('./daemon-pty-router')
     expect(mod.getDaemonProvider()).toBeInstanceOf(DaemonPtyRouter)
     expect(adapterInstances.some((instance) => instance.protocolVersion === 9)).toBe(true)
+  })
+
+  it('adopts a pre-scope daemon only when its verified process belongs to this login', async () => {
+    const mod = await importFresh()
+    probeSocketExistsMock.mockImplementation((p?: string) => p?.endsWith('daemon-v9.sock') ?? false)
+    netConnectMock.mockImplementation(() => {
+      const handlers: Record<string, (() => void)[]> = { connect: [], error: [] }
+      return {
+        on(event: string, cb: () => void) {
+          handlers[event]?.push(cb)
+          if (event === 'connect') {
+            queueMicrotask(() => cb())
+          }
+          return this
+        },
+        removeListener(event: string, cb: () => void) {
+          handlers[event] = handlers[event]?.filter((handler) => handler !== cb) ?? []
+          return this
+        },
+        destroy() {}
+      }
+    })
+
+    await mod.initDaemonPtyProvider(undefined, {
+      runtimeScope: 'macos-gui:501:1001:31622fb2-6a38-4323-9678-f0533e61d900'
+    })
+
+    const legacy = adapterInstances.find((instance) => instance.protocolVersion === 9)
+    expect(legacy?.options.runtimeScope).toBe(
+      'macos-gui:501:1001:31622fb2-6a38-4323-9678-f0533e61d900'
+    )
+    const current = adapterInstances.find(
+      (instance) => instance.protocolVersion === PROTOCOL_VERSION
+    )
+    expect(current?.options.historyPath).toBe(
+      join(FAKE_USER_DATA_PATH, 'terminal-history', 'daemon-login-session')
+    )
+    expect(legacy?.options.historyPath).toBe(join(FAKE_USER_DATA_PATH, 'terminal-history'))
+    expect(getVerifiedDaemonPidMock).toHaveBeenCalled()
+    expect(readMacosProcessSessionIdentityMock).toHaveBeenCalledWith(12345)
+  })
+
+  it('retires a pre-scope daemon from an earlier login instead of discovering its PTYs', async () => {
+    const mod = await importFresh()
+    probeSocketExistsMock.mockImplementation((p?: string) => p?.endsWith('daemon-v9.sock') ?? false)
+    readMacosProcessSessionIdentityMock.mockResolvedValue({ uid: 501, auditSessionId: 2002 })
+    netConnectMock.mockImplementation(() => {
+      const handlers: Record<string, (() => void)[]> = { connect: [], error: [] }
+      return {
+        on(event: string, cb: () => void) {
+          handlers[event]?.push(cb)
+          if (event === 'connect') {
+            queueMicrotask(() => cb())
+          }
+          return this
+        },
+        removeListener(event: string, cb: () => void) {
+          handlers[event] = handlers[event]?.filter((handler) => handler !== cb) ?? []
+          return this
+        },
+        destroy() {}
+      }
+    })
+
+    await mod.initDaemonPtyProvider(undefined, {
+      runtimeScope: 'macos-gui:501:1001:31622fb2-6a38-4323-9678-f0533e61d900'
+    })
+
+    expect(adapterInstances.some((instance) => instance.protocolVersion === 9)).toBe(false)
+    expect(daemonClientMock).toHaveBeenCalledWith(expect.objectContaining({ protocolVersion: 9 }))
   })
 
   it('restart path with no legacy adapters yields a bare DaemonPtyAdapter (not wrapped in a router)', async () => {
@@ -2553,6 +2652,53 @@ describe('daemon-init: runRestartDaemon (7-step sequence)', () => {
         '/fake/token',
         '--log-file',
         join(FAKE_USER_DATA_PATH, 'logs', 'daemon.log')
+      ]),
+      expect.objectContaining({ detached: true })
+    )
+  })
+
+  it('replaces a daemon that rejects the new macOS login scope before adoption', async () => {
+    const mod = await importFresh()
+    await mod.initDaemonPtyProvider(undefined, {
+      runtimeScope: 'macos-gui:501:2002:31622fb2-6a38-4323-9678-f0533e61d900'
+    })
+    const launcher = spawnerInstances[0].launcher as (
+      socketPath: string,
+      tokenPath: string
+    ) => Promise<{ shutdown(): Promise<void> }>
+    checkDaemonHealthMock.mockResolvedValueOnce('rejected')
+    forkMock.mockImplementationOnce(() => ({
+      pid: 12345,
+      on(event: string, cb: (arg?: unknown) => void) {
+        if (event === 'message') {
+          queueMicrotask(() => cb({ type: 'ready', startedAtMs: 1_000_000 }))
+        }
+        return this
+      },
+      off() {
+        return this
+      },
+      disconnect: vi.fn(),
+      unref: vi.fn()
+    }))
+
+    await launcher('/fake/socket', '/fake/token')
+
+    expect(checkDaemonHealthMock).toHaveBeenCalledWith(
+      '/fake/socket',
+      '/fake/token',
+      'macos-gui:501:2002:31622fb2-6a38-4323-9678-f0533e61d900'
+    )
+    expect(killStaleDaemonMock).toHaveBeenCalledWith(
+      FAKE_RUNTIME_DIR,
+      '/fake/socket',
+      '/fake/token'
+    )
+    expect(forkMock).toHaveBeenCalledWith(
+      FAKE_DAEMON_ENTRY_PATH,
+      expect.arrayContaining([
+        '--runtime-scope',
+        'macos-gui:501:2002:31622fb2-6a38-4323-9678-f0533e61d900'
       ]),
       expect.objectContaining({ detached: true })
     )

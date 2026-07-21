@@ -71,6 +71,23 @@ describe('daemon-entry parseArgs', () => {
     })
   })
 
+  it('parses the internal macOS runtime scope', () => {
+    expect(
+      parseArgs([
+        '--socket',
+        '/tmp/t.sock',
+        '--token',
+        '/tmp/t.token',
+        '--runtime-scope',
+        'macos-gui:501:100101:31622fb2-6a38-4323-9678-f0533e61d900'
+      ])
+    ).toEqual({
+      socketPath: '/tmp/t.sock',
+      tokenPath: '/tmp/t.token',
+      runtimeScope: 'macos-gui:501:100101:31622fb2-6a38-4323-9678-f0533e61d900'
+    })
+  })
+
   it('rejects either PID-record ownership argument without its pair', () => {
     expect(() =>
       parseArgs([

@@ -66,6 +66,7 @@ export type DaemonPtyAdapterOptions = {
   socketPath: string
   tokenPath: string
   protocolVersion?: number
+  runtimeScope?: string
   /** Directory for disk-based terminal history; when set, raw PTY output is written to disk for cold restore on daemon crash. */
   historyPath?: string
   /** Called when the daemon socket is unreachable; forks a fresh daemon so the next connect can succeed. */
@@ -93,6 +94,7 @@ export class DaemonPtyAdapter implements IPtyProvider {
   readonly protocolVersion: number
   private socketPath: string
   private tokenPath: string
+  private runtimeScope: string | undefined
   private client: DaemonClient
   private historyManager: HistoryManager | null
   private historyReader: HistoryReader | null
@@ -154,10 +156,12 @@ export class DaemonPtyAdapter implements IPtyProvider {
     this.protocolVersion = opts.protocolVersion ?? PROTOCOL_VERSION
     this.socketPath = opts.socketPath
     this.tokenPath = opts.tokenPath
+    this.runtimeScope = opts.runtimeScope
     this.client = new DaemonClient({
       socketPath: opts.socketPath,
       tokenPath: opts.tokenPath,
-      protocolVersion: opts.protocolVersion
+      protocolVersion: opts.protocolVersion,
+      ...(opts.runtimeScope ? { runtimeScope: opts.runtimeScope } : {})
     })
     this.historyManager = opts.historyPath ? new HistoryManager(opts.historyPath) : null
     this.historyReader = opts.historyPath ? new HistoryReader(opts.historyPath) : null
@@ -1227,11 +1231,18 @@ export class DaemonPtyAdapter implements IPtyProvider {
       return
     }
 
-    const health = await getMacDaemonSystemResolverHealth(
-      this.socketPath,
-      this.tokenPath,
-      this.protocolVersion
-    )
+    const health = this.runtimeScope
+      ? await getMacDaemonSystemResolverHealth(
+          this.socketPath,
+          this.tokenPath,
+          this.protocolVersion,
+          this.runtimeScope
+        )
+      : await getMacDaemonSystemResolverHealth(
+          this.socketPath,
+          this.tokenPath,
+          this.protocolVersion
+        )
     if (health !== 'unhealthy') {
       return
     }

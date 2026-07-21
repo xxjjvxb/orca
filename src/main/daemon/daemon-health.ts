@@ -80,7 +80,11 @@ function canConnectSocket(socketPath: string): Promise<boolean> {
   })
 }
 
-export function checkDaemonHealth(socketPath: string, tokenPath: string): Promise<DaemonHealth> {
+export function checkDaemonHealth(
+  socketPath: string,
+  tokenPath: string,
+  runtimeScope?: string
+): Promise<DaemonHealth> {
   return new Promise((resolve) => {
     if (process.platform !== 'win32' && !existsSync(socketPath)) {
       resolve('unreachable')
@@ -119,7 +123,8 @@ export function checkDaemonHealth(socketPath: string, tokenPath: string): Promis
         version: PROTOCOL_VERSION,
         token,
         clientId: 'health-check',
-        role: 'control'
+        role: 'control',
+        ...(runtimeScope ? { runtimeScope } : {})
       }
       sock?.write(encodeNdjson(hello))
     }
@@ -176,8 +181,12 @@ export function checkDaemonHealth(socketPath: string, tokenPath: string): Promis
   })
 }
 
-export async function healthCheckDaemon(socketPath: string, tokenPath: string): Promise<boolean> {
-  return (await checkDaemonHealth(socketPath, tokenPath)) === 'healthy'
+export async function healthCheckDaemon(
+  socketPath: string,
+  tokenPath: string,
+  runtimeScope?: string
+): Promise<boolean> {
+  return (await checkDaemonHealth(socketPath, tokenPath, runtimeScope)) === 'healthy'
 }
 
 function isSystemResolverHealth(value: unknown): value is SystemResolverHealth {
@@ -187,7 +196,8 @@ function isSystemResolverHealth(value: unknown): value is SystemResolverHealth {
 export function getMacDaemonSystemResolverHealth(
   socketPath: string,
   tokenPath: string,
-  protocolVersion = PROTOCOL_VERSION
+  protocolVersion = PROTOCOL_VERSION,
+  runtimeScope?: string
 ): Promise<SystemResolverHealth> {
   if (process.platform !== 'darwin') {
     return Promise.resolve('unknown')
@@ -231,7 +241,8 @@ export function getMacDaemonSystemResolverHealth(
         version: protocolVersion,
         token,
         clientId: 'resolver-health-check',
-        role: 'control'
+        role: 'control',
+        ...(runtimeScope ? { runtimeScope } : {})
       }
       sock?.write(encodeNdjson(hello))
     }
@@ -605,6 +616,17 @@ async function readVerifiedDaemonPid(
   }
 
   return parsedPid
+}
+
+export async function getVerifiedDaemonPid(
+  runtimeDir: string,
+  socketPath: string,
+  tokenPath: string,
+  protocolVersion = PROTOCOL_VERSION
+): Promise<number | null> {
+  return (
+    (await readVerifiedDaemonPid(runtimeDir, socketPath, tokenPath, protocolVersion))?.pid ?? null
+  )
 }
 
 export async function isDaemonStaleForCurrentBundle(

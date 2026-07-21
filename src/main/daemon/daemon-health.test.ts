@@ -147,6 +147,35 @@ describe('daemon health', () => {
     }
   })
 
+  it('rejects health adoption from a different runtime scope', async () => {
+    const server = new DaemonServer({
+      socketPath,
+      tokenPath,
+      runtimeScope: 'macos-gui:501:1001:31622fb2-6a38-4323-9678-f0533e61d900',
+      spawnSubprocess: () => createMockSubprocess()
+    })
+    await server.start()
+
+    try {
+      await expect(
+        checkDaemonHealth(
+          socketPath,
+          tokenPath,
+          'macos-gui:501:2002:31622fb2-6a38-4323-9678-f0533e61d900'
+        )
+      ).resolves.toBe('rejected')
+      await expect(
+        checkDaemonHealth(
+          socketPath,
+          tokenPath,
+          'macos-gui:501:1001:31622fb2-6a38-4323-9678-f0533e61d900'
+        )
+      ).resolves.toBe('healthy')
+    } finally {
+      await server.shutdown()
+    }
+  })
+
   it('does not unlink a live socket when the pid file does not match this daemon', async () => {
     if (process.platform === 'win32') {
       return

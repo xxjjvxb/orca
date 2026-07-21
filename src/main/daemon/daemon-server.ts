@@ -41,6 +41,7 @@ export type DaemonServerOptions = {
   startedAtMs?: number
   /** Direct-construction seam for protocol fixture tests; production never overrides it. */
   protocolVersion?: number
+  runtimeScope?: string
   onIdleShutdown?: () => void
   /** Direct-construction-only controls; production uses the compiled initial-adoption timeout. */
   initialAdoptionTestConfig?: {
@@ -96,6 +97,7 @@ export class DaemonServer {
   private launchNonce: string | null
   private startedAtMs: number | null
   private protocolVersion: number
+  private runtimeScope: string | undefined
   private onIdleShutdown: () => void
   private ptySpawnHealthCheck: () => Promise<void>
   private preparePtySpawn: () => Promise<void>
@@ -155,6 +157,7 @@ export class DaemonServer {
     this.tokenPath = opts.tokenPath
     this.pidPath = opts.pidPath ?? null
     this.protocolVersion = opts.protocolVersion ?? PROTOCOL_VERSION
+    this.runtimeScope = opts.runtimeScope
     this.launchNonce =
       opts.launchNonce ??
       (this.protocolVersion >= CLEAN_DISCONNECT_PROTOCOL_VERSION ? randomUUID() : null)
@@ -433,6 +436,13 @@ export class DaemonServer {
       return
     }
 
+    if (hello.runtimeScope !== this.runtimeScope) {
+      this.log.log('client-hello-rejected', { reason: 'runtime-scope-mismatch', role: hello.role })
+      socket.write(encodeNdjson({ type: 'hello', ok: false, error: 'Runtime scope mismatch' }))
+      socket.destroy()
+      return
+    }
+
     this.log.log('client-hello-accepted', { role: hello.role, clientId: hello.clientId })
     socket.write(
       encodeNdjson({
@@ -446,7 +456,8 @@ export class DaemonServer {
                 launchNonce: this.launchNonce
               }
             }
-          : {})
+          : {}),
+        ...(this.runtimeScope ? { runtimeScope: this.runtimeScope } : {})
       })
     )
 

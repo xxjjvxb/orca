@@ -8,7 +8,8 @@ import {
   CLEAN_DISCONNECT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   NOTIFY_PREFIX,
-  DaemonProtocolError
+  DaemonProtocolError,
+  supportsRuntimeScope
 } from './types'
 import type {
   DaemonEndpointIdentity,
@@ -27,6 +28,7 @@ export type DaemonClientOptions = {
   socketPath: string
   tokenPath: string
   protocolVersion?: number
+  runtimeScope?: string
 }
 
 type PendingRequest = {
@@ -39,6 +41,7 @@ export class DaemonClient {
   private socketPath: string
   private tokenPath: string
   private protocolVersion: number
+  private runtimeScope: string | undefined
   private clientId = randomUUID()
 
   private controlSocket: Socket | null = null
@@ -68,6 +71,7 @@ export class DaemonClient {
     this.socketPath = opts.socketPath
     this.tokenPath = opts.tokenPath
     this.protocolVersion = opts.protocolVersion ?? PROTOCOL_VERSION
+    this.runtimeScope = opts.runtimeScope
   }
 
   isConnected(): boolean {
@@ -330,7 +334,8 @@ export class DaemonClient {
         version: this.protocolVersion,
         token,
         clientId: this.clientId,
-        role
+        role,
+        ...(this.runtimeScope ? { runtimeScope: this.runtimeScope } : {})
       }
 
       let buffer = ''
@@ -371,6 +376,13 @@ export class DaemonClient {
         try {
           const response = JSON.parse(line) as HelloResponse
           if (response.ok) {
+            if (
+              supportsRuntimeScope(this.protocolVersion) &&
+              response.runtimeScope !== this.runtimeScope
+            ) {
+              finish(new DaemonProtocolError('Runtime scope mismatch'))
+              return
+            }
             const identity = parseDaemonEndpointIdentity(response.daemonIdentity)
             if (
               (this.protocolVersion >= CLEAN_DISCONNECT_PROTOCOL_VERSION && identity === null) ||

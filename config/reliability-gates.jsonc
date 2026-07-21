@@ -5483,6 +5483,96 @@
         "Windows native runtime watches bypass this child path; WSL reservation/release is deterministic-contract tested but not live fault-injected, and SSH registration ownership is not live-relay fault-injected."
       ],
       "demotionRule": "Demote or quarantine if the fault harness flakes without a product or harness bug, if healthy operation exceeds one runtime watcher child, if total physical operation exceeds eight children including retiring generations, if quarantine children outlive their roots or repeat after fusing, if event delivery becomes unbounded, or if metadata/stat work returns to the serve process."
+    },
+    {
+      "id": "terminal-session.macos-login-scope",
+      "title": "macOS daemon PTYs stay inside their owning login session",
+      "maturity": "experimental",
+      "protection": "partial",
+      "owner": "terminal-provider",
+      "layer": "daemon-lifecycle-contract",
+      "surfaces": [
+        "daemon startup",
+        "terminal restore",
+        "macOS logout",
+        "WindowServer recovery",
+        "fast user switching"
+      ],
+      "platforms": ["macos"],
+      "providers": ["daemon"],
+      "coveredPlatforms": ["macos"],
+      "coveredProviders": ["daemon"],
+      "coverageNotes": "Real-socket deterministic tests inject macOS audit-session scopes and cover logout/login rejection, same-session recovery, daemon loss, two-user fast switching, and concurrent clients. A built-daemon fixture covers scoped and unscoped handshakes with a real disposable PTY. Destructive live logout and WindowServer qualification remain uncollected.",
+      "motivatingLinks": ["https://github.com/stablyai/orca/issues/7936"],
+      "invariant": "A client may attach only to a daemon and PTYs in the same valid runtime/login-session scope; a later macOS login or machine boot must not inherit prior-scope PTYs or recovery bytes, while same-session relaunches and independently scoped user accounts retain their sessions.",
+      "oracle": "Create a PTY through an authenticated real-socket client in one injected audit-session scope, disconnect the GUI owner while the daemon survives, and require a later-login scope to fail hello before inventory or createOrAttach. Require same-scope WindowServer/app recovery to return isNew=false with the original PTY PID, daemon loss to return isNew=true, and separate user endpoints to remain independently attachable across switching.",
+      "commands": [
+        "pnpm exec vitest run --config config/vitest.config.ts src/main/daemon/daemon-login-session-history.test.ts src/main/daemon/macos-gui-session-scope.test.ts src/main/daemon/macos-login-session-lifecycle.test.ts src/main/daemon/daemon-health.test.ts src/main/daemon/daemon-init.test.ts"
+      ],
+      "testFiles": [
+        "src/main/daemon/daemon-login-session-history.test.ts",
+        "src/main/daemon/macos-gui-session-scope.test.ts",
+        "src/main/daemon/macos-login-session-lifecycle.test.ts",
+        "src/main/daemon/daemon-health.test.ts",
+        "src/main/daemon/daemon-init.test.ts"
+      ],
+      "assertionRefs": [
+        {
+          "file": "src/main/daemon/macos-login-session-lifecycle.test.ts",
+          "assertions": [
+            "a later login is rejected before warm attachment",
+            "WindowServer restart, app crash, and normal reopen preserve the PTY only inside one scope",
+            "reboot creates a fresh PTY",
+            "fast-switched user endpoints remain isolated and independently usable",
+            "concurrent same-scope clients share one PTY"
+          ]
+        },
+        {
+          "file": "src/main/daemon/daemon-init.test.ts",
+          "assertions": [
+            "scope rejection enters exact-PID bounded daemon replacement",
+            "pre-scope daemons are adopted only when verified process audit identity matches"
+          ]
+        }
+      ],
+      "evidenceRuns": [
+        {
+          "date": "2026-07-20",
+          "runner": "local",
+          "platform": "macos",
+          "command": "pnpm exec vitest run --config config/vitest.config.ts src/main/daemon/daemon-login-session-history.test.ts src/main/daemon/macos-gui-session-scope.test.ts src/main/daemon/macos-login-session-lifecycle.test.ts src/main/daemon/daemon-health.test.ts src/main/daemon/daemon-init.test.ts",
+          "result": "passed",
+          "durationSeconds": 0.46,
+          "summary": "Five deterministic scope-resolution, lifecycle, recovery-history, health, and startup-replacement files passed with 103 tests, including independent fast-switched users and repeated audit ids across reboot."
+        }
+      ],
+      "runtimeBudget": {
+        "p95Seconds": 5,
+        "scope": "focused daemon lifecycle contract tests"
+      },
+      "flakeHistory": {
+        "status": "unknown",
+        "evidence": "The deterministic local suite and isolated built-daemon smoke passed; CI and soak history are not yet available."
+      },
+      "redGreenEvidence": {
+        "status": "partial",
+        "evidence": "Before the production fence, the deterministic logout fixture warm-attached the prior PTY with isNew=false and PID 7936. The fixed fixture rejects the later scope during hello. Saved CI red artifacts remain uncollected."
+      },
+      "performanceBudget": {
+        "required": true,
+        "evidence": "Desktop startup adds one bounded launchctl process-domain read plus one bounded boot-session sysctl read, with no polling, timers, inventories, or hot-path work. Legacy checks run only for discovered daemon endpoints and reuse the already-resolved boot scope. Login-scoped recovery reuses one tagged directory, preventing per-login directory growth; same-scope restarts retain files while a repeated audit id after reboot cannot."
+      },
+      "promotionCriteria": [
+        "Collect stable CI history for the deterministic macOS gate.",
+        "Run optional destructive qualification in a disposable macOS account or VM for full logout and WindowServer recovery.",
+        "Attach saved intentional-break evidence for scope validation and history isolation."
+      ],
+      "knownGaps": [
+        "No real logout, WindowServer termination, or reboot was performed on the developer account.",
+        "The built-daemon smoke is an explicit post-build validation step rather than a source-only test file.",
+        "Linux, Windows, WSL, SSH, and headless paths are contractually unscoped and were checked by existing focused suites rather than live cross-platform hosts."
+      ],
+      "demotionRule": "Keep experimental or demote if the gate flakes without a product or harness bug, if a scope mismatch reaches session inventory or PTY attachment, or if same-scope recovery changes daemon or PTY identity."
     }
   ]
 }

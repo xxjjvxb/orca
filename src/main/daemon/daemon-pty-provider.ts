@@ -4,6 +4,7 @@ import type { DaemonEvent, CreateOrAttachResult } from './types'
 export type DaemonPtyProviderOptions = {
   socketPath: string
   tokenPath: string
+  runtimeScope?: string
 }
 
 export type DaemonSpawnOptions = {
@@ -31,7 +32,8 @@ export class DaemonPtyProvider {
   constructor(opts: DaemonPtyProviderOptions) {
     this.client = new DaemonClient({
       socketPath: opts.socketPath,
-      tokenPath: opts.tokenPath
+      tokenPath: opts.tokenPath,
+      ...(opts.runtimeScope ? { runtimeScope: opts.runtimeScope } : {})
     })
   }
 

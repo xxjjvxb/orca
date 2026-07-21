@@ -9,6 +9,7 @@ export type DaemonStartOptions = {
   startedAtMs?: number
   /** Direct-construction seam for versioned protocol fixtures; never CLI/env configured. */
   protocolVersion?: number
+  runtimeScope?: string
   spawnSubprocess: DaemonServerOptions['spawnSubprocess']
   preparePtySpawn?: DaemonServerOptions['preparePtySpawn']
   log?: DaemonFileLog
@@ -28,6 +29,7 @@ export async function startDaemon(opts: DaemonStartOptions): Promise<DaemonHandl
     ...(opts.launchNonce ? { launchNonce: opts.launchNonce } : {}),
     ...(opts.startedAtMs ? { startedAtMs: opts.startedAtMs } : {}),
     ...(opts.protocolVersion !== undefined ? { protocolVersion: opts.protocolVersion } : {}),
+    ...(opts.runtimeScope ? { runtimeScope: opts.runtimeScope } : {}),
     spawnSubprocess: opts.spawnSubprocess,
     ...(opts.preparePtySpawn ? { preparePtySpawn: opts.preparePtySpawn } : {}),
     ...(opts.log ? { log: opts.log } : {}),

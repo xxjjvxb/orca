@@ -28,11 +28,17 @@ import {
 import {
   getMacDaemonSystemResolverHealth,
   getDaemonLaunchIdentity,
+  getVerifiedDaemonPid,
   checkDaemonHealth,
   isDaemonStaleForCurrentBundle,
   killStaleDaemon,
   parseDaemonPidFile
 } from './daemon-health'
+import {
+  parseMacosGuiSessionScope,
+  readMacosProcessSessionIdentity
+} from './macos-gui-session-scope'
+import { prepareDaemonLoginSessionHistoryDir } from './daemon-login-session-history'
 import {
   collectPinnedDaemonVersions,
   materializeRelocatedDaemonHost,
@@ -71,6 +77,7 @@ type DaemonProvider = DaemonPtyRouter | DaemonPtyAdapter | DegradedDaemonPtyProv
 let adapter: DaemonProvider | null = null
 // Why: coalesce concurrent restartDaemon() calls so two entries can't race the 7-step sequence against a half-spawned replacement.
 let restartInFlight: Promise<RestartDaemonResult> | null = null
+let daemonRuntimeScope: string | undefined
 
 function getRuntimeDir(): string {
   const dir = join(app.getPath('userData'), 'daemon')
@@ -78,10 +85,8 @@ function getRuntimeDir(): string {
   return dir
 }
 
-function getHistoryDir(): string {
-  const dir = join(app.getPath('userData'), 'terminal-history')
-  mkdirSync(dir, { recursive: true })
-  return dir
+function getHistoryDir(runtimeScope?: string): string {
+  return prepareDaemonLoginSessionHistoryDir(app.getPath('userData'), runtimeScope)
 }
 
 function getDaemonEntryPath(): string {
@@ -147,9 +152,15 @@ function probeSocket(socketPath: string): Promise<boolean> {
 async function getAliveDaemonSessionCount(
   socketPath: string,
   tokenPath: string,
-  protocolVersion = PROTOCOL_VERSION
+  protocolVersion = PROTOCOL_VERSION,
+  runtimeScope?: string
 ): Promise<number | null> {
-  const client = new DaemonClient({ socketPath, tokenPath, protocolVersion })
+  const client = new DaemonClient({
+    socketPath,
+    tokenPath,
+    protocolVersion,
+    ...(runtimeScope ? { runtimeScope } : {})
+  })
   try {
     await client.ensureConnected()
     const result = await client.request<ListSessionsResult>('listSessions', undefined)
@@ -164,11 +175,12 @@ async function getAliveDaemonSessionCount(
 function createPreservedDaemonHandle(
   runtimeDir: string,
   protocolVersion = PROTOCOL_VERSION,
-  mode?: 'degraded-new-pty-fallback'
+  mode?: 'degraded-new-pty-fallback',
+  runtimeScope?: string
 ): DaemonProcessHandle {
   const handle: DaemonProcessHandle = {
     shutdown: async () => {
-      await cleanupDaemonForProtocol(runtimeDir, protocolVersion)
+      await cleanupDaemonForProtocol(runtimeDir, protocolVersion, runtimeScope)
     }
   }
   if (mode) {
@@ -181,9 +193,16 @@ async function holdDaemonAdoptionLease(
   handle: DaemonProcessHandle,
   socketPath: string,
   tokenPath: string,
+  runtimeScope?: string,
   connectedClient?: DaemonClient
 ): Promise<DaemonProcessHandle> {
-  const client = connectedClient ?? new DaemonClient({ socketPath, tokenPath })
+  const client =
+    connectedClient ??
+    new DaemonClient({
+      socketPath,
+      tokenPath,
+      ...(runtimeScope ? { runtimeScope } : {})
+    })
   try {
     await client.ensureConnected()
   } catch (error) {
@@ -307,9 +326,15 @@ function isNoSuchProcessError(error: unknown): boolean {
 async function shouldPreserveDaemonWithLiveSessions(
   socketPath: string,
   tokenPath: string,
-  replacementLabel: string
+  replacementLabel: string,
+  runtimeScope?: string
 ): Promise<boolean> {
-  const liveSessionCount = await getAliveDaemonSessionCount(socketPath, tokenPath)
+  const liveSessionCount = await getAliveDaemonSessionCount(
+    socketPath,
+    tokenPath,
+    PROTOCOL_VERSION,
+    runtimeScope
+  )
   if (liveSessionCount === 0) {
     return false
   }
@@ -321,12 +346,16 @@ async function shouldPreserveDaemonWithLiveSessions(
   return true
 }
 
-function createOutOfProcessLauncher(runtimeDir: string): DaemonLauncher {
+function createOutOfProcessLauncher(runtimeDir: string, runtimeScope?: string): DaemonLauncher {
   return async (socketPath, tokenPath, suppliedPidPath, suppliedLaunchNonce) => {
     const entryPath = getDaemonEntryPath()
     const pidPath = suppliedPidPath ?? getDaemonPidPath(runtimeDir)
     const launchNonce = suppliedLaunchNonce ?? randomUUID()
-    let adoptionClient: DaemonClient | null = new DaemonClient({ socketPath, tokenPath })
+    let adoptionClient: DaemonClient | null = new DaemonClient({
+      socketPath,
+      tokenPath,
+      ...(runtimeScope ? { runtimeScope } : {})
+    })
     try {
       // Why: acquire the full pair before control-only probes so an expired inherited deadline can't fire in the probe-to-adoption gap.
       await adoptionClient.ensureConnected()
@@ -340,18 +369,31 @@ function createOutOfProcessLauncher(runtimeDir: string): DaemonLauncher {
       const connectedClient = adoptionClient ?? undefined
       adoptionClient = null
       return holdDaemonAdoptionLease(
-        createPreservedDaemonHandle(runtimeDir, PROTOCOL_VERSION, mode),
+        createPreservedDaemonHandle(runtimeDir, PROTOCOL_VERSION, mode, runtimeScope),
         socketPath,
         tokenPath,
+        runtimeScope,
         connectedClient
       )
     }
     try {
-      const health = await checkDaemonHealth(socketPath, tokenPath)
+      const health = await checkDaemonHealth(socketPath, tokenPath, runtimeScope)
       if (health === 'healthy') {
-        const resolverHealth = await getMacDaemonSystemResolverHealth(socketPath, tokenPath)
+        const resolverHealth = runtimeScope
+          ? await getMacDaemonSystemResolverHealth(
+              socketPath,
+              tokenPath,
+              PROTOCOL_VERSION,
+              runtimeScope
+            )
+          : await getMacDaemonSystemResolverHealth(socketPath, tokenPath)
         if (resolverHealth === 'unhealthy') {
-          const liveSessionCount = await getAliveDaemonSessionCount(socketPath, tokenPath)
+          const liveSessionCount = await getAliveDaemonSessionCount(
+            socketPath,
+            tokenPath,
+            PROTOCOL_VERSION,
+            runtimeScope
+          )
           if (liveSessionCount !== 0) {
             console.warn(
               liveSessionCount === null
@@ -361,7 +403,7 @@ function createOutOfProcessLauncher(runtimeDir: string): DaemonLauncher {
             return preserveDaemon()
           }
           console.warn('[daemon] Replacing daemon with unavailable macOS system resolver')
-          await cleanupDaemonForProtocol(runtimeDir, PROTOCOL_VERSION)
+          await cleanupDaemonForProtocol(runtimeDir, PROTOCOL_VERSION, runtimeScope)
         } else {
           // Why: a protocol-healthy daemon can outlive its launching app bundle (dev worktree rebuild, or packaged update replacing the app path).
           const identity = await getDaemonLaunchIdentity(
@@ -384,7 +426,12 @@ function createOutOfProcessLauncher(runtimeDir: string): DaemonLauncher {
               ? 'launched before the current app bundle was installed'
               : 'launched from a different app path'
             if (
-              await shouldPreserveDaemonWithLiveSessions(socketPath, tokenPath, replacementLabel)
+              await shouldPreserveDaemonWithLiveSessions(
+                socketPath,
+                tokenPath,
+                replacementLabel,
+                runtimeScope
+              )
             ) {
               return preserveDaemon()
             }
@@ -393,7 +440,7 @@ function createOutOfProcessLauncher(runtimeDir: string): DaemonLauncher {
                 ? '[daemon] Replacing daemon launched before the current app bundle was installed'
                 : '[daemon] Replacing daemon launched from a different app path'
             )
-            await cleanupDaemonForProtocol(runtimeDir, PROTOCOL_VERSION)
+            await cleanupDaemonForProtocol(runtimeDir, PROTOCOL_VERSION, runtimeScope)
           } else {
             // Why: healthy daemon from a previous session answered a protocol ping — safe to reuse.
             return preserveDaemon()
@@ -401,7 +448,12 @@ function createOutOfProcessLauncher(runtimeDir: string): DaemonLauncher {
         }
       } else {
         // Why: a busy machine can time out the health check on a live daemon; re-verify with a session list before killing its sessions.
-        let liveSessionCount = await getAliveDaemonSessionCount(socketPath, tokenPath)
+        let liveSessionCount = await getAliveDaemonSessionCount(
+          socketPath,
+          tokenPath,
+          PROTOCOL_VERSION,
+          runtimeScope
+        )
         // Why: a wedged-but-connectable daemon (Windows update relaunch) may still own live sessions, so grace-retry before replacing; a permanent wedge (#8689) exhausts the grace, and 'rejected' skips it (handshake refused = never adoptable).
         let graceRetry = 0
         while (
@@ -410,7 +462,12 @@ function createOutOfProcessLauncher(runtimeDir: string): DaemonLauncher {
           graceRetry < WEDGED_DAEMON_GRACE_RETRIES &&
           (await probeSocket(socketPath))
         ) {
-          liveSessionCount = await getAliveDaemonSessionCount(socketPath, tokenPath)
+          liveSessionCount = await getAliveDaemonSessionCount(
+            socketPath,
+            tokenPath,
+            PROTOCOL_VERSION,
+            runtimeScope
+          )
           graceRetry++
         }
         if (liveSessionCount !== null && liveSessionCount > 0) {
@@ -448,6 +505,7 @@ function createOutOfProcessLauncher(runtimeDir: string): DaemonLauncher {
           pidPath,
           '--launch-nonce',
           launchNonce,
+          ...(runtimeScope ? ['--runtime-scope', runtimeScope] : []),
           ...daemonLogArgs()
         ],
         {
@@ -596,7 +654,8 @@ function createOutOfProcessLauncher(runtimeDir: string): DaemonLauncher {
             shutdown: () => terminateLaunchedDaemonChild(child)
           },
           socketPath,
-          tokenPath
+          tokenPath,
+          runtimeScope
         )
       } catch (error) {
         // Why: another client may have adopted this live process; keep its pid record until exit, but remove one published after an early exit.
@@ -625,7 +684,10 @@ function createOutOfProcessLauncher(runtimeDir: string): DaemonLauncher {
   }
 }
 
-export async function initDaemonPtyProvider(signal?: AbortSignal): Promise<void> {
+export async function initDaemonPtyProvider(
+  signal?: AbortSignal,
+  options: { runtimeScope?: string } = {}
+): Promise<void> {
   logDaemonMilestone('daemon-init-start')
   // Why: e2e coverage for the startup PTY gate (#5232) needs a daemon init that deterministically outlasts the first-window timeout.
   const e2eInitDelayMs = Number(process.env.ORCA_E2E_DAEMON_INIT_DELAY_MS)
@@ -636,7 +698,7 @@ export async function initDaemonPtyProvider(signal?: AbortSignal): Promise<void>
 
   const newSpawner = new DaemonSpawner({
     runtimeDir,
-    launcher: createOutOfProcessLauncher(runtimeDir)
+    launcher: createOutOfProcessLauncher(runtimeDir, options.runtimeScope)
   })
 
   // Why: assign the module-level spawner/adapter only after both succeed, so a failed ensureRunning() leaves no stale spawner.
@@ -649,7 +711,8 @@ export async function initDaemonPtyProvider(signal?: AbortSignal): Promise<void>
     // Why: fail-open may already have spawned fallback PTYs; don't install late, but retire an empty daemon (live sessions reject it and survive).
     const abortedStartupAdapter = new DaemonPtyAdapter({
       socketPath: info.socketPath,
-      tokenPath: info.tokenPath
+      tokenPath: info.tokenPath,
+      ...(options.runtimeScope ? { runtimeScope: options.runtimeScope } : {})
     })
     releaseDaemonAdoptionLease(newSpawner.getHandle())
     await abortedStartupAdapter.disconnectOnly()
@@ -659,7 +722,8 @@ export async function initDaemonPtyProvider(signal?: AbortSignal): Promise<void>
   const newAdapter = new DaemonPtyAdapter({
     socketPath: info.socketPath,
     tokenPath: info.tokenPath,
-    historyPath: getHistoryDir(),
+    ...(options.runtimeScope ? { runtimeScope: options.runtimeScope } : {}),
+    historyPath: getHistoryDir(options.runtimeScope),
     // Why: on daemon death, ensureConnected() detects the dead socket and calls this to fork a replacement before retrying.
     respawn: async () => {
       console.warn('[daemon] Daemon process died — respawning')
@@ -675,7 +739,7 @@ export async function initDaemonPtyProvider(signal?: AbortSignal): Promise<void>
     await newAdapter.establishLifecycleLease()
     releaseDaemonAdoptionLease(newSpawner.getHandle())
 
-    legacyAdapters = await createLegacyDaemonAdapters(runtimeDir)
+    legacyAdapters = await createLegacyDaemonAdapters(runtimeDir, options.runtimeScope)
     routedAdapter =
       launchMode === 'degraded-new-pty-fallback'
         ? new DegradedDaemonPtyProvider({
@@ -709,6 +773,7 @@ export async function initDaemonPtyProvider(signal?: AbortSignal): Promise<void>
     throw error
   }
   spawner = newSpawner
+  daemonRuntimeScope = options.runtimeScope
   adapter = routedAdapter
   setLocalPtyProvider(routedAdapter)
   // Why: the first window may register PTY listeners before daemon init finishes; rebind so daemon PTYs still fan out events.
@@ -827,7 +892,7 @@ async function runRestartDaemon(): Promise<RestartDaemonResult> {
   // Step 3: kill the current-protocol daemon process; legacy adapters untouched.
   let info: Awaited<ReturnType<DaemonSpawner['ensureRunning']>>
   try {
-    await cleanupDaemonForProtocol(runtimeDir, PROTOCOL_VERSION)
+    await cleanupDaemonForProtocol(runtimeDir, PROTOCOL_VERSION, daemonRuntimeScope)
 
     // Step 4: reuse the existing spawner so the respawn closure baked into long-lived adapters stays valid (do NOT new one).
     currentSpawner.resetHandle()
@@ -842,7 +907,8 @@ async function runRestartDaemon(): Promise<RestartDaemonResult> {
   const newCurrent = new DaemonPtyAdapter({
     socketPath: info.socketPath,
     tokenPath: info.tokenPath,
-    historyPath: getHistoryDir(),
+    ...(daemonRuntimeScope ? { runtimeScope: daemonRuntimeScope } : {}),
+    historyPath: getHistoryDir(daemonRuntimeScope),
     respawn: async () => {
       console.warn('[daemon] Daemon process died — respawning')
       currentSpawner.resetHandle()
@@ -918,7 +984,8 @@ export type OrphanedDaemonCleanupResult = {
 
 export async function cleanupDaemonForProtocol(
   runtimeDir: string,
-  protocolVersion: number
+  protocolVersion: number,
+  runtimeScope?: string
 ): Promise<OrphanedDaemonCleanupResult> {
   const socketPath = getDaemonSocketPath(runtimeDir, protocolVersion)
   const tokenPath = getDaemonTokenPath(runtimeDir, protocolVersion)
@@ -946,7 +1013,12 @@ export async function cleanupDaemonForProtocol(
     return { cleaned: false, killedCount: 0 }
   }
 
-  const client = new DaemonClient({ socketPath, tokenPath, protocolVersion })
+  const client = new DaemonClient({
+    socketPath,
+    tokenPath,
+    protocolVersion,
+    ...(runtimeScope ? { runtimeScope } : {})
+  })
   let killedCount = 0
   let didRequestShutdown = false
   let didKillStaleDaemon = false
@@ -1020,7 +1092,31 @@ function legacyDaemonProcessMayBeAlive(runtimeDir: string, protocolVersion: numb
   }
 }
 
-async function createLegacyDaemonAdapters(runtimeDir: string): Promise<DaemonPtyAdapter[]> {
+async function legacyDaemonMatchesRuntimeScope(
+  runtimeDir: string,
+  socketPath: string,
+  tokenPath: string,
+  protocolVersion: number,
+  runtimeScope: string | undefined
+): Promise<boolean> {
+  if (!runtimeScope) {
+    return true
+  }
+  const expectedIdentity = parseMacosGuiSessionScope(runtimeScope)
+  const pid = await getVerifiedDaemonPid(runtimeDir, socketPath, tokenPath, protocolVersion)
+  const processIdentity = pid === null ? null : await readMacosProcessSessionIdentity(pid)
+  return (
+    expectedIdentity !== null &&
+    processIdentity !== null &&
+    processIdentity.uid === expectedIdentity.uid &&
+    processIdentity.auditSessionId === expectedIdentity.auditSessionId
+  )
+}
+
+async function createLegacyDaemonAdapters(
+  runtimeDir: string,
+  runtimeScope?: string
+): Promise<DaemonPtyAdapter[]> {
   const adapters: DaemonPtyAdapter[] = []
   for (const protocolVersion of PREVIOUS_DAEMON_PROTOCOL_VERSIONS) {
     const socketPath = getDaemonSocketPath(runtimeDir, protocolVersion)
@@ -1048,6 +1144,19 @@ async function createLegacyDaemonAdapters(runtimeDir: string): Promise<DaemonPty
       }
       continue
     }
+    if (
+      !(await legacyDaemonMatchesRuntimeScope(
+        runtimeDir,
+        socketPath,
+        tokenPath,
+        protocolVersion,
+        runtimeScope
+      ))
+    ) {
+      // Why: pre-scope daemons ignore hello metadata, so process audit identity is the only safe upgrade-time attach fence.
+      await cleanupDaemonForProtocol(runtimeDir, protocolVersion)
+      continue
+    }
     // Keep old-protocol PTYs routed to their original daemon during upgrade; legacy adapters never respawn (new code would recreate stale env semantics).
     // historyPath is still needed for cleanup — without it a later v4 session reusing the same ID could false-restore stale scrollback.bin.
     adapters.push(
@@ -1055,6 +1164,7 @@ async function createLegacyDaemonAdapters(runtimeDir: string): Promise<DaemonPty
         socketPath,
         tokenPath,
         protocolVersion,
+        ...(runtimeScope ? { runtimeScope } : {}),
         historyPath: getHistoryDir()
       })
     )

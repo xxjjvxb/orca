@@ -21,7 +21,9 @@ export {
   PREVIOUS_DAEMON_PROTOCOL_VERSIONS,
   PROTOCOL_VERSION,
   PTY_STARTUP_INGRESS_PROTOCOL_VERSION,
-  supportsPtyStartupIngress
+  RUNTIME_SCOPE_PROTOCOL_VERSION,
+  supportsPtyStartupIngress,
+  supportsRuntimeScope
 } from './daemon-protocol-version'
 
 // ─── Session State Machine ──────────────────────────────────────────

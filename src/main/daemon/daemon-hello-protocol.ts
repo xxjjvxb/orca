@@ -4,6 +4,7 @@ export type HelloMessage = {
   token: string
   clientId: string
   role: 'control' | 'stream'
+  runtimeScope?: string
 }
 
 export type DaemonEndpointIdentity = {
@@ -17,4 +18,5 @@ export type HelloResponse = {
   ok: boolean
   error?: string
   daemonIdentity?: DaemonEndpointIdentity
+  runtimeScope?: string
 }

@@ -19,6 +19,7 @@ export type ParsedDaemonArgs = {
   tokenPath: string
   pidPath?: string
   launchNonce?: string
+  runtimeScope?: string
   /** Optional — absent for adopted old daemons and tests, which log nothing. */
   logFilePath?: string
 }
@@ -29,6 +30,7 @@ export function parseArgs(argv: string[]): ParsedDaemonArgs {
   let logFilePath = ''
   let pidPath = ''
   let launchNonce = ''
+  let runtimeScope = ''
 
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--socket' && argv[i + 1]) {
@@ -46,6 +48,9 @@ export function parseArgs(argv: string[]): ParsedDaemonArgs {
     } else if (argv[i] === '--launch-nonce' && argv[i + 1]) {
       launchNonce = argv[i + 1]
       i++
+    } else if (argv[i] === '--runtime-scope' && argv[i + 1]) {
+      runtimeScope = argv[i + 1]
+      i++
     }
   }
 
@@ -61,6 +66,7 @@ export function parseArgs(argv: string[]): ParsedDaemonArgs {
     socketPath,
     tokenPath,
     ...(pidPath ? { pidPath, launchNonce } : {}),
+    ...(runtimeScope ? { runtimeScope } : {}),
     ...(logFilePath ? { logFilePath } : {})
   }
 }
@@ -73,7 +79,7 @@ async function main(): Promise<void> {
   // an otherwise healthy detached daemon. Swallow it: stderr is diagnostic only.
   process.stderr.on('error', () => {})
 
-  const { socketPath, tokenPath, pidPath, launchNonce, logFilePath } = parseArgs(
+  const { socketPath, tokenPath, pidPath, launchNonce, runtimeScope, logFilePath } = parseArgs(
     process.argv.slice(2)
   )
   const startedAtMs = Date.now() - process.uptime() * 1000
@@ -162,6 +168,7 @@ async function main(): Promise<void> {
     tokenPath,
     ...(pidPath ? { pidPath } : {}),
     ...(launchNonce ? { launchNonce } : {}),
+    ...(runtimeScope ? { runtimeScope } : {}),
     ...(pidPath ? { startedAtMs } : {}),
     log: daemonLog,
     preparePtySpawn: runMacosLoginPreflight,
